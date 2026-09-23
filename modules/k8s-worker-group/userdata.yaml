@@ -10,12 +10,17 @@ users:
     groups: [adm, sudo]
     shell: /bin/bash
     sudo: ALL=(ALL) NOPASSWD:ALL
-    lock_passwd: false
-    passwd: ${ubuntu_password_hash}
     ssh_authorized_keys:
 %{ for key in ssh_authorized_keys ~}
       - ${key}
 %{ endfor ~}
+
+chpasswd:
+  expire: false
+  users:
+    - name: ubuntu
+      password: ${ubuntu_password_hash}
+      type: hash
 
 write_files:
   - path: /etc/modules-load.d/k8s.conf
