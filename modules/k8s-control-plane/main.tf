@@ -26,14 +26,18 @@ locals {
   management_client_cidr = cidrsubnet(var.load_balancer.subnet, 0, 0)
 
   user_data = templatefile("${path.module}/userdata.yaml", {
-    control_plane_ip        = local.control_plane_ip
-    apiserver_cert_sans     = local.load_balancer_cert_sans
-    join_token              = local.join_token
-    kubernetes_version      = var.kubernetes_version
-    pod_network_cidr        = var.pod_network_cidr
-    flannel_version         = var.cni.version
-    flannel_manifest_sha256 = var.cni.manifest_sha256
-    ssh_authorized_keys     = var.ssh_authorized_keys
+    control_plane_ip            = local.control_plane_ip
+    apiserver_cert_sans         = local.load_balancer_cert_sans
+    join_token                  = local.join_token
+    kubernetes_version          = var.kubernetes_version
+    pod_network_cidr            = var.pod_network_cidr
+    flannel_version             = var.cni.version
+    flannel_manifest_sha256     = var.cni.manifest_sha256
+    metrics_server_enabled      = var.metrics_server.enabled
+    metrics_server_version      = var.metrics_server.version
+    metrics_server_sha256       = var.metrics_server.manifest_sha256
+    metrics_server_insecure_tls = var.metrics_server.kubelet_insecure_tls
+    ssh_authorized_keys         = var.ssh_authorized_keys
   })
 
   # Kernel interface names depend on guest PCI topology, so both NICs are
@@ -219,6 +223,7 @@ resource "terraform_data" "kubeconfig_export" {
       KNOWN_HOSTS_PATH="$KUBECONFIG_PATH.known_hosts"
       touch "$KNOWN_HOSTS_PATH"
       chmod 0600 "$KNOWN_HOSTS_PATH"
+      ssh-keygen -R "$SSH_HOST" -f "$KNOWN_HOSTS_PATH" >/dev/null 2>&1 || true
       ssh-keygen -R "[$SSH_HOST]:$SSH_PORT" -f "$KNOWN_HOSTS_PATH" >/dev/null 2>&1 || true
 
       for attempt in $(seq 1 60); do

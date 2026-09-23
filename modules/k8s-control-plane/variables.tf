@@ -152,6 +152,27 @@ variable "cni" {
   }
 }
 
+variable "metrics_server" {
+  description = "metrics-server release applied to the cluster after bootstrap. Applied over the LoadBalancer SSH listener, so it does not touch cloud-init and never forces the control-plane VM to be rebuilt."
+  type = object({
+    enabled              = optional(bool, true)
+    version              = optional(string, "v0.7.2")
+    manifest_sha256      = optional(string, "f103539a54ed72efe66616afc74a8bfaed651703cb3918797599046af5617441")
+    kubelet_insecure_tls = optional(bool, true)
+  })
+  default = {}
+
+  validation {
+    condition     = can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+$", var.metrics_server.version))
+    error_message = "metrics_server.version must be a pinned metrics-server release such as v0.7.2."
+  }
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{64}$", var.metrics_server.manifest_sha256))
+    error_message = "metrics_server.manifest_sha256 must be the hex sha256 of the pinned components.yaml."
+  }
+}
+
 variable "pod_network_cidr" {
   description = "Pod network CIDR passed to kubeadm init."
   type        = string
