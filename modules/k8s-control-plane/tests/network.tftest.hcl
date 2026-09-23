@@ -8,6 +8,12 @@ variables {
     address = "172.16.100.10/24"
     gateway = "172.16.100.1"
   }
+
+  load_balancer = {
+    address = "192.168.18.240"
+    subnet  = "192.168.18.1/24"
+    gateway = "192.168.18.1"
+  }
 }
 
 run "static_address_reaches_every_consumer" {
@@ -29,13 +35,28 @@ run "static_address_reaches_every_consumer" {
   }
 
   assert {
-    condition     = strcontains(local.user_data, "--apiserver-advertise-address=172.16.100.10")
+    condition     = strcontains(local.user_data, "advertiseAddress: \"172.16.100.10\"")
     error_message = "kubeadm must advertise the configured static IP so worker joins reach the API server."
   }
 
   assert {
-    condition     = strcontains(local.user_data, "--apiserver-cert-extra-sans=172.16.100.10,192.168.18.240,192.168.18.241,192.168.18.242,192.168.18.243,192.168.18.244,192.168.18.245")
-    error_message = "The API server certificate must cover the cluster VLAN IP and every possible LoadBalancer pool address."
+    condition     = strcontains(local.user_data, "- name: \"node-ip\"") && strcontains(local.user_data, "value: \"172.16.100.10\"")
+    error_message = "The control-plane kubelet must pin node-ip to the routable VLAN address, not the masquerade management address."
+  }
+
+  assert {
+    condition     = strcontains(local.user_data, "- \"172.16.100.10\"") && strcontains(local.user_data, "- \"192.168.18.240\"")
+    error_message = "The API server certificate must cover the cluster VLAN IP and the caller-supplied LoadBalancer address."
+  }
+
+  assert {
+    condition     = strcontains(local.user_data, "kube-flannel.yml")
+    error_message = "The control plane must install a CNI so nodes can leave NotReady."
+  }
+
+  assert {
+    condition     = strcontains(local.user_data, "sha256sum -c -")
+    error_message = "The downloaded Flannel manifest must be verified against a pinned checksum."
   }
 
   assert {
@@ -44,8 +65,8 @@ run "static_address_reaches_every_consumer" {
   }
 
   assert {
-    condition     = harvester_ippool.control_plane.range[0].start == "192.168.18.240" && harvester_ippool.control_plane.range[0].end == "192.168.18.245"
-    error_message = "The default IP pool must use the agreed home-network reservation."
+    condition     = harvester_ippool.control_plane.range[0].start == "192.168.18.240" && harvester_ippool.control_plane.range[0].end == "192.168.18.240"
+    error_message = "The IP pool must pin the exact caller-supplied address, not a range, so the management endpoint never changes."
   }
 
   assert {
@@ -100,4 +121,18 @@ run "address_without_prefix_rejected" {
   }
 
   expect_failures = [var.network]
+}
+
+run "load_balancer_gateway_outside_subnet_rejected" {
+  command = plan
+
+  variables {
+    load_balancer = {
+      address = "192.168.18.240"
+      subnet  = "192.168.18.1/24"
+      gateway = "10.0.0.1"
+    }
+  }
+
+  expect_failures = [var.load_balancer]
 }
