@@ -14,7 +14,7 @@ locals {
   join_token       = "${random_string.join_token_id.result}.${random_string.join_token_secret.result}"
   control_plane_ip = split("/", var.network.address)[0]
 
-  mac_seed       = md5("${var.namespace}/${var.name_prefix}")
+  mac_seed       = md5("${var.namespace}/k8s-control-plane-01")
   management_mac = "02:${substr(local.mac_seed, 0, 2)}:${substr(local.mac_seed, 2, 2)}:${substr(local.mac_seed, 4, 2)}:${substr(local.mac_seed, 6, 2)}:01"
   cluster_mac    = "02:${substr(local.mac_seed, 0, 2)}:${substr(local.mac_seed, 2, 2)}:${substr(local.mac_seed, 4, 2)}:${substr(local.mac_seed, 6, 2)}:02"
 
@@ -89,9 +89,8 @@ locals {
 module "control_plane" {
   source = "../virtual-machine"
 
-  name_prefix    = var.name_prefix
-  instance_count = 1
-  namespace      = var.namespace
+  name      = "k8s-control-plane-01"
+  namespace = var.namespace
 
   cpu    = var.cpu
   memory = var.memory
@@ -157,7 +156,7 @@ resource "harvester_loadbalancer" "control_plane" {
 
   backend_selector {
     key    = "harvesterhci.io/vmName"
-    values = module.control_plane.instance_names
+    values = [module.control_plane.name]
   }
 
   listener {
@@ -193,7 +192,7 @@ resource "terraform_data" "kubeconfig_export" {
   count = var.kubeconfig_export.enabled ? 1 : 0
 
   triggers_replace = {
-    control_plane_id = module.control_plane.ids[module.control_plane.instance_names[0]]
+    control_plane_id = module.control_plane.id
     load_balancer_ip = harvester_loadbalancer.control_plane.ip_address
     api_port         = tostring(var.load_balancer.listener_port)
     ssh_port         = tostring(var.kubeconfig_export.ssh_port)
@@ -217,12 +216,17 @@ resource "terraform_data" "kubeconfig_export" {
       umask 077
       test -f "$PRIVATE_KEY_PATH"
       mkdir -p "$(dirname "$KUBECONFIG_PATH")"
+      KNOWN_HOSTS_PATH="$KUBECONFIG_PATH.known_hosts"
+      touch "$KNOWN_HOSTS_PATH"
+      chmod 0600 "$KNOWN_HOSTS_PATH"
+      ssh-keygen -R "[$SSH_HOST]:$SSH_PORT" -f "$KNOWN_HOSTS_PATH" >/dev/null 2>&1 || true
 
       for attempt in $(seq 1 60); do
         if ssh \
           -o BatchMode=yes \
           -o ConnectTimeout=5 \
           -o StrictHostKeyChecking=accept-new \
+          -o UserKnownHostsFile="$KNOWN_HOSTS_PATH" \
           -i "$PRIVATE_KEY_PATH" \
           -p "$SSH_PORT" \
           "$SSH_USER@$SSH_HOST" \

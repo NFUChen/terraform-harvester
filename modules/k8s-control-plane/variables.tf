@@ -9,12 +9,6 @@ variable "namespace" {
   default     = "default"
 }
 
-variable "name_prefix" {
-  description = "Name prefix for the Kubernetes control-plane VM."
-  type        = string
-  default     = "k8s-control-plane"
-}
-
 variable "cpu" {
   description = "Number of virtual CPU cores."
   type        = number

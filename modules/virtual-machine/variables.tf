@@ -1,21 +1,11 @@
-variable "name_prefix" {
-  description = "DNS-compatible prefix used to name VMs. Instances are named <prefix>-01, <prefix>-02, and so on."
+variable "name" {
+  description = "Exact name of the single VM created by this module."
   type        = string
+  nullable    = false
 
   validation {
-    condition     = can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.name_prefix)) && length(var.name_prefix) <= 58
-    error_message = "name_prefix must be a lowercase DNS-compatible name no longer than 58 characters."
-  }
-}
-
-variable "instance_count" {
-  description = "Number of identically configured VMs to create."
-  type        = number
-  default     = 1
-
-  validation {
-    condition     = var.instance_count >= 1 && var.instance_count <= 99 && floor(var.instance_count) == var.instance_count
-    error_message = "instance_count must be an integer between 1 and 99."
+    condition     = can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.name)) && length(var.name) <= 63
+    error_message = "name must be a lowercase DNS-compatible name no longer than 63 characters."
   }
 }
 
@@ -93,7 +83,7 @@ variable "machine_type" {
 }
 
 variable "set_hostname_from_instance_name" {
-  description = "Set each VM's hostname to its instance name (<name_prefix>-NN). Disable when cloud-init or DHCP owns the guest hostname."
+  description = "Set the VM hostname to its name. Disable when cloud-init or DHCP owns the guest hostname."
   type        = bool
   default     = true
 }
@@ -288,13 +278,13 @@ variable "ephemeral_disks" {
 }
 
 variable "persistent_disks" {
-  description = "Externally managed PVCs attached per VM. Each disk must map every instance name to a distinct existing PVC. The module never deletes these PVCs."
+  description = "Externally managed PVCs attached to the VM. The module never deletes these PVCs."
   type = map(object({
-    volume_names = map(string)
-    bus          = optional(string, "virtio")
-    cache_mode   = optional(string)
-    boot_order   = optional(number, 0)
-    hot_plug     = optional(bool, false)
+    existing_volume_name = string
+    bus                  = optional(string, "virtio")
+    cache_mode           = optional(string)
+    boot_order           = optional(number, 0)
+    hot_plug             = optional(bool, false)
   }))
   default = {}
 
@@ -324,21 +314,16 @@ variable "persistent_disks" {
   }
 
   validation {
-    condition = alltrue(flatten([
-      for disk in values(var.persistent_disks) : [
-        for volume_name in values(disk.volume_names) :
-        can(regex("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$", volume_name))
-      ]
-    ]))
-    error_message = "Every persistent volume name must be a non-empty DNS-compatible PVC name."
+    condition = alltrue([
+      for disk in values(var.persistent_disks) :
+      can(regex("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$", disk.existing_volume_name))
+    ])
+    error_message = "Every persistent disk existing_volume_name must be a non-empty DNS-compatible PVC name."
   }
 
   validation {
-    condition = alltrue([
-      for disk in values(var.persistent_disks) :
-      length(values(disk.volume_names)) == length(toset(values(disk.volume_names)))
-    ])
-    error_message = "Each persistent disk must use a distinct PVC for every VM instance."
+    condition     = length(values(var.persistent_disks)) == length(toset([for disk in values(var.persistent_disks) : disk.existing_volume_name]))
+    error_message = "A VM cannot attach the same persistent PVC under multiple disk names."
   }
 }
 

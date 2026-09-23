@@ -1,8 +1,4 @@
 locals {
-  instance_names = [
-    for index in range(var.instance_count) : format("%s-%02d", var.name_prefix, index + 1)
-  ]
-
   referenced_images = {
     for image in toset(compact(concat(
       [var.root_image],
@@ -17,7 +13,7 @@ locals {
   common_labels = merge(
     {
       "app.kubernetes.io/managed-by" = "terraform"
-      "app.kubernetes.io/name"       = var.name_prefix
+      "app.kubernetes.io/name"       = var.name
     },
     var.labels
   )
@@ -77,44 +73,38 @@ locals {
     }
   ]
 
-  persistent_disks_by_instance = {
-    for instance_name in local.instance_names : instance_name => [
-      for name in sort(keys(var.persistent_disks)) : {
-        name                 = name
-        type                 = "disk"
-        size                 = null
-        bus                  = var.persistent_disks[name].bus
-        cache_mode           = var.persistent_disks[name].cache_mode
-        boot_order           = var.persistent_disks[name].boot_order
-        image                = null
-        existing_volume_name = lookup(var.persistent_disks[name].volume_names, instance_name, null)
-        container_image_name = null
-        hot_plug             = var.persistent_disks[name].hot_plug
-        auto_delete          = false
-        storage_class_name   = null
-        volume_mode          = null
-        access_mode          = null
-      }
-    ]
-  }
+  persistent_disk_list = [
+    for name in sort(keys(var.persistent_disks)) : {
+      name                 = name
+      type                 = "disk"
+      size                 = null
+      bus                  = var.persistent_disks[name].bus
+      cache_mode           = var.persistent_disks[name].cache_mode
+      boot_order           = var.persistent_disks[name].boot_order
+      image                = null
+      existing_volume_name = var.persistent_disks[name].existing_volume_name
+      container_image_name = null
+      hot_plug             = var.persistent_disks[name].hot_plug
+      auto_delete          = false
+      storage_class_name   = null
+      volume_mode          = null
+      access_mode          = null
+    }
+  ]
 
-  disks_by_instance = {
-    for instance_name in local.instance_names : instance_name => concat(
-      [local.root_disk],
-      local.ephemeral_disk_list,
-      local.persistent_disks_by_instance[instance_name],
-      local.cdrom_list
-    )
-  }
+  disks = concat(
+    [local.root_disk],
+    local.ephemeral_disk_list,
+    local.persistent_disk_list,
+    local.cdrom_list
+  )
 
-  storage_fingerprint_by_instance = {
-    for instance_name in local.instance_names : instance_name => sha256(jsonencode({
-      root_disk        = local.root_disk
-      ephemeral_disks  = local.ephemeral_disk_list
-      persistent_disks = local.persistent_disks_by_instance[instance_name]
-      cdroms           = local.cdrom_list
-    }))
-  }
+  storage_fingerprint = sha256(jsonencode({
+    root_disk        = local.root_disk
+    ephemeral_disks  = local.ephemeral_disk_list
+    persistent_disks = local.persistent_disk_list
+    cdroms           = local.cdrom_list
+  }))
 
   # The VM's cloudinit block only references a static Secret name, so editing
   # the payload updates harvester_cloudinit_secret in place and leaves the VM
@@ -138,9 +128,7 @@ data "harvester_image" "referenced" {
 }
 
 resource "terraform_data" "storage_topology" {
-  for_each = toset(local.instance_names)
-
-  input = local.storage_fingerprint_by_instance[each.key]
+  input = local.storage_fingerprint
 }
 
 resource "terraform_data" "cloudinit_configuration" {
@@ -148,32 +136,30 @@ resource "terraform_data" "cloudinit_configuration" {
 }
 
 resource "harvester_cloudinit_secret" "this" {
-  for_each = var.cloudinit.enabled ? toset(local.instance_names) : toset([])
+  count = var.cloudinit.enabled ? 1 : 0
 
-  name         = "${each.key}-cloudinit"
+  name         = "${var.name}-cloudinit"
   namespace    = var.namespace
-  description  = "Cloud-init configuration for ${each.key}. Managed by Terraform."
+  description  = "Cloud-init configuration for ${var.name}. Managed by Terraform."
   user_data    = var.cloudinit.user_data
   network_data = var.cloudinit.network_data
 
   labels = merge(local.common_labels, {
-    "app.kubernetes.io/instance" = each.key
+    "app.kubernetes.io/instance" = var.name
   })
 }
 
 resource "harvester_virtualmachine" "this" {
-  for_each = toset(local.instance_names)
-
-  name        = each.key
+  name        = var.name
   namespace   = var.namespace
   description = var.description
 
   labels = merge(local.common_labels, {
-    "app.kubernetes.io/instance" = each.key
+    "app.kubernetes.io/instance" = var.name
   })
   tags = var.tags
 
-  hostname = var.set_hostname_from_instance_name ? each.key : null
+  hostname = var.set_hostname_from_instance_name ? var.name : null
 
   cpu             = var.cpu
   cpu_model       = var.cpu_model
@@ -218,7 +204,7 @@ resource "harvester_virtualmachine" "this" {
   }
 
   dynamic "disk" {
-    for_each = local.disks_by_instance[each.key]
+    for_each = local.disks
 
     content {
       name                 = disk.value.name
@@ -243,8 +229,8 @@ resource "harvester_virtualmachine" "this" {
 
     content {
       type                     = var.cloudinit.type
-      user_data_secret_name    = harvester_cloudinit_secret.this[each.key].name
-      network_data_secret_name = harvester_cloudinit_secret.this[each.key].name
+      user_data_secret_name    = harvester_cloudinit_secret.this[0].name
+      network_data_secret_name = harvester_cloudinit_secret.this[0].name
     }
   }
 
@@ -287,12 +273,12 @@ resource "harvester_virtualmachine" "this" {
     # shows a permanent phantom diff removing that entry. Ignoring `disk`
     # drift is safe because every disk field the caller can actually set
     # (root/ephemeral/persistent/cdrom) is already covered by
-    # storage_fingerprint_by_instance below; any real storage change still
+    # storage_fingerprint below; any real storage change still
     # replaces the VM through replace_triggered_by.
     ignore_changes = [disk]
 
     replace_triggered_by = [
-      terraform_data.storage_topology[each.key],
+      terraform_data.storage_topology,
       terraform_data.cloudinit_configuration,
     ]
 
@@ -314,25 +300,6 @@ resource "harvester_virtualmachine" "this" {
     precondition {
       condition     = var.cloudinit.enabled || length(var.ssh_keys) == 0
       error_message = "ssh_keys require cloudinit.enabled = true."
-    }
-
-    precondition {
-      condition = alltrue([
-        for disk in values(var.persistent_disks) :
-        contains(keys(disk.volume_names), each.key)
-      ])
-      error_message = "Every persistent disk must provide an existing PVC name for every VM instance."
-    }
-
-    precondition {
-      condition = length([
-        for disk in values(var.persistent_disks) : disk.volume_names[each.key]
-        if contains(keys(disk.volume_names), each.key)
-        ]) == length(toset([
-          for disk in values(var.persistent_disks) : disk.volume_names[each.key]
-          if contains(keys(disk.volume_names), each.key)
-      ]))
-      error_message = "A VM cannot attach the same persistent PVC under multiple disk names."
     }
 
     precondition {

@@ -67,7 +67,7 @@ run "static_address_reaches_every_consumer" {
   }
 
   assert {
-    condition     = length(module.control_plane.network_interfaces["k8s-control-plane-01"]) == 2
+    condition     = length(module.control_plane.network_interfaces) == 2
     error_message = "The control plane must have management and cluster interfaces."
   }
 

@@ -4,8 +4,8 @@ run "cloudinit_replacement_fingerprint" {
   command = plan
 
   variables {
-    name_prefix = "test"
-    root_image  = null
+    name       = "test"
+    root_image = null
     cloudinit = {
       enabled      = true
       type         = "noCloud"
