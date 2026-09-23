@@ -1,0 +1,49 @@
+name: Terraform Test
+
+on:
+  pull_request:
+    paths:
+      - "modules/**"
+      - ".github/workflows/terraform-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  discover-modules:
+    runs-on: ubuntu-latest
+    outputs:
+      modules: ${{ steps.find.outputs.modules }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Find modules with tests
+        id: find
+        run: |
+          modules=$(find modules -mindepth 1 -maxdepth 1 -type d -exec test -d "{}/tests" \; -print | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "modules=${modules}" >> "$GITHUB_OUTPUT"
+
+  terraform-test:
+    needs: discover-modules
+    if: needs.discover-modules.outputs.modules != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: ${{ fromJson(needs.discover-modules.outputs.modules) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        working-directory: ${{ matrix.module }}
+        run: terraform init -backend=false
+
+      - name: Terraform Test
+        working-directory: ${{ matrix.module }}
+        run: terraform test
