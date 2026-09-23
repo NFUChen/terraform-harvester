@@ -60,9 +60,9 @@ jobs:
               cat terraform-test.log
               echo '```'
               echo
-            } > terraform-test-summary.md
+            } > terraform-test-summary-${{ strategy.job-index }}.md
           else
-            : > terraform-test-summary.md
+            : > terraform-test-summary-${{ strategy.job-index }}.md
           fi
 
           exit "$status"
@@ -72,7 +72,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: terraform-test-summary-${{ strategy.job-index }}
-          path: ${{ matrix.module }}/terraform-test-summary.md
+          path: ${{ matrix.module }}/terraform-test-summary-${{ strategy.job-index }}.md
           if-no-files-found: error
 
   test-summary:
