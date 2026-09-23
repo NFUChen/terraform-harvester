@@ -1,3 +1,5 @@
+mock_provider "kubernetes" {}
+
 mock_provider "harvester" {
   mock_data "harvester_clusternetwork" {
     defaults = {
@@ -462,6 +464,104 @@ run "caller_cannot_override_clusternetwork_label" {
   expect_failures = [
     var.networks,
   ]
+}
+
+run "network_with_dhcp_and_nat_services" {
+  command = plan
+
+  variables {
+    namespace            = "harvester-public"
+    cluster_network_name = "workload"
+
+    networks = {
+      "v100" = {
+        vlan_id = 100
+        services = {
+          cidr              = "172.16.100.0/24"
+          enable_dhcp       = true
+          enable_nat        = true
+          pool_start_offset = 100
+          pool_end_offset   = 200
+          dns_servers       = ["1.1.1.1", "8.8.8.8"]
+          node_selector = {
+            "kubernetes.io/hostname" = "test-node"
+          }
+        }
+      }
+    }
+  }
+
+  assert {
+    condition     = module.dhcp["v100"].server_ip == "172.16.100.2"
+    error_message = "DHCP must reserve host offset 2 automatically."
+  }
+
+  assert {
+    condition     = module.nat["v100"].gateway_ip == "172.16.100.1"
+    error_message = "NAT must reserve host offset 1 automatically."
+  }
+}
+
+run "services_disabled_create_no_workloads" {
+  command = plan
+
+  variables {
+    cluster_network_name = "workload"
+    networks = {
+      "isolated-v200" = {
+        vlan_id = 200
+      }
+    }
+  }
+
+  assert {
+    condition     = length(module.dhcp) == 0 && length(module.nat) == 0
+    error_message = "Networks without services must remain pure NADs for backward compatibility."
+  }
+}
+
+run "all_services_disabled_rejected" {
+  command = plan
+
+  variables {
+    cluster_network_name = "workload"
+    networks = {
+      "v100" = {
+        vlan_id = 100
+        services = {
+          cidr        = "172.16.100.0/24"
+          enable_dhcp = false
+          enable_nat  = false
+          node_selector = {
+            "kubernetes.io/hostname" = "test-node"
+          }
+        }
+      }
+    }
+  }
+
+  expect_failures = [var.networks]
+}
+
+run "service_network_name_must_fit_child_resources" {
+  command = plan
+
+  variables {
+    cluster_network_name = "workload"
+    networks = {
+      "vlan.with.dots" = {
+        vlan_id = 100
+        services = {
+          cidr = "172.16.100.0/24"
+          node_selector = {
+            "kubernetes.io/hostname" = "test-node"
+          }
+        }
+      }
+    }
+  }
+
+  expect_failures = [var.networks]
 }
 
 run "empty_networks_map_rejected" {

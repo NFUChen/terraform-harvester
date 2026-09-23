@@ -6,6 +6,19 @@ locals {
       "platform.harvester.io/protected" = "true"
     }
   )
+
+  dhcp_services = {
+    for name, network in var.networks : name => network
+    if network.services != null && network.services.enable_dhcp
+  }
+
+  nat_services = {
+    for name, network in var.networks : name => network
+    if network.services != null && network.services.enable_nat
+  }
+
+  default_dhcp_image = "docker.io/jpillora/dnsmasq@sha256:34132cc95b1b8c124d2402b0da53995e68d2d46b8d0020d63cac9ecccb0e8008"
+  default_nat_image  = "docker.io/nicolaka/netshoot@sha256:a20c2531bf35436ed3766cd6cfe89d352b050ccc4d7005ce6400adf97503da1b"
 }
 
 # This fails fast at plan time if the ClusterNetwork does not exist. The
@@ -64,4 +77,30 @@ resource "harvester_network" "this" {
     # and any intended change is a blue/green migration to a new network name.
     ignore_changes = all
   }
+}
+
+module "dhcp" {
+  source   = "../vlan-dhcp"
+  for_each = local.dhcp_services
+
+  network_id = harvester_network.this[each.key].id
+  cidr       = each.value.services.cidr
+
+  pool_start_offset = each.value.services.pool_start_offset
+  pool_end_offset   = each.value.services.pool_end_offset
+  dns_servers       = each.value.services.dns_servers
+  lease_time        = each.value.services.lease_time
+  node_selector     = each.value.services.node_selector
+  image             = coalesce(each.value.services.dhcp_image, local.default_dhcp_image)
+}
+
+module "nat" {
+  source   = "../vlan-nat-gateway"
+  for_each = local.nat_services
+
+  network_id = harvester_network.this[each.key].id
+  cidr       = each.value.services.cidr
+
+  node_selector = each.value.services.node_selector
+  image         = coalesce(each.value.services.nat_image, local.default_nat_image)
 }

@@ -29,7 +29,7 @@ output "observed_cluster_network_names" {
 }
 
 output "declared_routes" {
-  description = "Route configuration currently declared in var.networks. Route fields are mutable and normally reconcile to the live NAD."
+  description = "Route configuration currently declared in var.networks. The NAD is create-once (ignore_changes=all), so compare this with observed_routes; differences require migration to a new network name."
   value = {
     for key, network in var.networks : key => {
       mode           = network.route.mode
@@ -55,4 +55,14 @@ output "observed_routes" {
 output "route_connectivity" {
   description = "Provider-observed route connectivity keyed by NAD name. This does not prove VM guest or application connectivity."
   value       = { for key, network in harvester_network.this : key => network.route_connectivity }
+}
+
+output "dhcp_server_ips" {
+  description = "DHCP server IPs keyed by network name for networks with enable_dhcp=true."
+  value       = { for key, service in module.dhcp : key => service.server_ip }
+}
+
+output "gateway_ips" {
+  description = "NAT gateway IPs keyed by network name for networks with enable_nat=true."
+  value       = { for key, service in module.nat : key => service.gateway_ip }
 }

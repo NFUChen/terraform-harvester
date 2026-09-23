@@ -159,7 +159,11 @@ resource "kubernetes_deployment_v1" "dhcp" {
 
           liveness_probe {
             exec {
-              command = ["/bin/sh", "-ec", "kill -0 1"]
+              command = [
+                "/bin/sh",
+                "-ec",
+                "ip -4 addr show dev net1 | grep -F 'inet ${local.server_ip}/${local.prefix_length}' >/dev/null && netstat -uln | grep -E '(^|:)67[[:space:]]' >/dev/null",
+              ]
             }
             initial_delay_seconds = 5
             period_seconds        = 10

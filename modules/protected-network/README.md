@@ -70,6 +70,60 @@ module "workload_networks" {
 }
 ```
 
+## Built-in DHCP and NAT services
+
+Add a `services` object to create one DHCP Pod and one NAT gateway Pod for the
+VLAN without wiring separate modules in the root configuration:
+
+```hcl
+networks = {
+  "v100" = {
+    vlan_id = 100
+
+    services = {
+      cidr              = "172.16.100.0/24"
+      enable_dhcp       = true
+      enable_nat        = true
+      pool_start_offset = 100
+      pool_end_offset   = 200
+      dns_servers       = ["1.1.1.1", "8.8.8.8"]
+
+      node_selector = {
+        "kubernetes.io/hostname" = "local-harvester"
+      }
+    }
+  }
+}
+```
+
+The composition reserves predictable addresses:
+
+```text
+gateway / NAT: cidrhost(cidr, 1)  -> 172.16.100.1
+DHCP server:   cidrhost(cidr, 2)  -> 172.16.100.2
+lease pool:    caller-supplied host offsets
+```
+
+The actual DHCP service is the child `vlan-dhcp` Deployment. The composition
+does not write `route_dhcp_server_ip` implicitly: protected NADs are
+create-once (`ignore_changes = all`), and controller route metadata is not
+required for DHCP to function. If a newly created network needs Harvester
+route metadata, declare it explicitly under `route` before the first apply;
+existing networks require blue/green migration rather than metadata updates.
+
+The child implementations remain independent Pods and failure domains:
+
+```text
+protected-network
+├── NAD
+├── vlan-dhcp (optional)
+└── vlan-nat-gateway (optional)
+```
+
+Both service modules are lab/sandbox single-Pod designs. DHCP leases and NAT
+conntrack state are ephemeral, and updates use `Recreate`; do not use this
+composition as production HA networking.
+
 ## Manual route mode
 
 ```hcl
@@ -217,12 +271,18 @@ node uplink or physical VLAN path works.
 Before creating workload networks, verify VLANConfig matched nodes and uplink
 health on every node that may host the VM.
 
-## Route updates
+## Route metadata is immutable
 
-The module freezes VLAN and ClusterNetwork, but allows route annotation
-updates. A route update does not restart VM Pods and does not prove guest
-connectivity. Review route changes as production network changes and validate
-DHCP/gateway/application traffic after apply.
+The module uses `ignore_changes = all` to prevent provider 1.9.0 from feeding
+controller-computed labels/CIDR/gateway back into an invalid `route_mode=auto`
+update. Consequently VLAN, ClusterNetwork, route metadata, labels, description,
+tags, and timeouts are create-once for each NAD name.
+
+Changing any declared NAD field produces a no-op plan; compare `declared_*` and
+`observed_*` outputs to detect that configuration migration is required. Create
+a new network name and migrate VMs instead of editing the existing NAD. DHCP
+and NAT child workloads remain independently updatable because they are
+separate Kubernetes resources outside the ignored NAD lifecycle.
 
 ## Labels
 

@@ -1,12 +1,6 @@
 terraform {
   required_version = ">= 1.3"
-
   required_providers {
-    harvester = {
-      source  = "harvester/harvester"
-      version = "= 1.9.0"
-    }
-
     kubernetes = {
       source  = "hashicorp/kubernetes"
       version = "~> 2.38"
