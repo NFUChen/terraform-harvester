@@ -264,6 +264,16 @@ resource "harvester_virtualmachine" "this" {
   }
 
   lifecycle {
+    # Provider 1.9.0's importer reads the cloud-init disk (cloudinitdisk) that
+    # Harvester's own builder creates from the `cloudinit` block back into the
+    # `disk` list. Config here only declares `cloudinit`, so every read/plan
+    # shows a permanent phantom diff removing that entry. Ignoring `disk`
+    # drift is safe because every disk field the caller can actually set
+    # (root/ephemeral/persistent/cdrom) is already covered by
+    # storage_fingerprint_by_instance below; any real storage change still
+    # replaces the VM through replace_triggered_by.
+    ignore_changes = [disk]
+
     replace_triggered_by = [
       terraform_data.storage_topology[each.key],
     ]
