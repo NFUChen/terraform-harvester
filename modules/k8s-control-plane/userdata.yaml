@@ -49,5 +49,5 @@ runcmd:
   - [apt-mark, hold, kubelet, kubeadm, kubectl]
   - [systemctl, enable, --now, containerd]
   - [systemctl, enable, --now, qemu-guest-agent]
-  - [sh, -c, "kubeadm init --token=${join_token} --token-ttl=0 --pod-network-cidr=${pod_network_cidr} && mkdir -p /home/ubuntu/.kube && cp /etc/kubernetes/admin.conf /home/ubuntu/.kube/config && chown -R ubuntu:ubuntu /home/ubuntu/.kube"]
+  - [sh, -c, "kubeadm init --apiserver-advertise-address=${control_plane_ip} --apiserver-cert-extra-sans=${control_plane_ip} --token=${join_token} --token-ttl=0 --pod-network-cidr=${pod_network_cidr} && mkdir -p /home/ubuntu/.kube && cp /etc/kubernetes/admin.conf /home/ubuntu/.kube/config && chown -R ubuntu:ubuntu /home/ubuntu/.kube"]
   

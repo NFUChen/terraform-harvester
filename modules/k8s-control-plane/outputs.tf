@@ -1,6 +1,6 @@
 output "control_plane_ip" {
-  description = "Primary IP address of the Kubernetes control-plane VM."
-  value       = module.control_plane.primary_ip_addresses[module.control_plane.instance_names[0]]
+  description = "Configured static IP address of the Kubernetes control-plane VM."
+  value       = local.control_plane_ip
 }
 
 output "join_token" {
@@ -11,6 +11,6 @@ output "join_token" {
 
 output "worker_join_command" {
   description = "Worker join command. CA verification is skipped because the CA hash is created inside the VM during kubeadm init."
-  value       = "kubeadm join ${module.control_plane.primary_ip_addresses[module.control_plane.instance_names[0]]}:6443 --token ${local.join_token} --discovery-token-unsafe-skip-ca-verification"
+  value       = "kubeadm join ${local.control_plane_ip}:6443 --token ${local.join_token} --discovery-token-unsafe-skip-ca-verification"
   sensitive   = true
 }
