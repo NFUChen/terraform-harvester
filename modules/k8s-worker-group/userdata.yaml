@@ -53,15 +53,25 @@ write_files:
       DEVICE="${mount.device}"
       MOUNT_PATH="${mount.mount_path}"
       FILESYSTEM="${mount.filesystem}"
+      echo "mount-persistent-disks: checking $DEVICE for an existing filesystem"
       if ! blkid "$DEVICE" >/dev/null 2>&1; then
+        echo "mount-persistent-disks: $DEVICE has no filesystem, creating $FILESYSTEM"
         mkfs.$FILESYSTEM "$DEVICE"
+      else
+        echo "mount-persistent-disks: $DEVICE already has a filesystem, skipping mkfs"
       fi
       UUID="$(blkid -s UUID -o value "$DEVICE")"
+      echo "mount-persistent-disks: $DEVICE UUID=$UUID"
       mkdir -p "$MOUNT_PATH"
       if ! grep -q "^UUID=$UUID " /etc/fstab; then
+        echo "mount-persistent-disks: adding fstab entry for $MOUNT_PATH"
         echo "UUID=$UUID $MOUNT_PATH $FILESYSTEM defaults,nofail 0 2" >> /etc/fstab
+      else
+        echo "mount-persistent-disks: fstab entry for $MOUNT_PATH already present"
       fi
+      echo "mount-persistent-disks: mounting $MOUNT_PATH"
       mount "$MOUNT_PATH"
+      echo "mount-persistent-disks: $MOUNT_PATH mounted ($(df -h "$MOUNT_PATH" | tail -1))"
 %{ endfor ~}
 %{ endif ~}
   - path: /usr/local/bin/worker-http.py
