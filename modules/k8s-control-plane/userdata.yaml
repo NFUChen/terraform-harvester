@@ -74,7 +74,7 @@ runcmd:
   - [systemctl, enable, --now, containerd]
   - [systemctl, enable, --now, qemu-guest-agent]
   - [sh, -c, "kubeadm init --config=/root/kubeadm-init.yaml && mkdir -p /home/ubuntu/.kube && cp /etc/kubernetes/admin.conf /home/ubuntu/.kube/config && chown -R ubuntu:ubuntu /home/ubuntu/.kube"]
-  # Flannel is pinned by release and verified by checksum. Without a CNI every
-  # node stays NotReady and CoreDNS stays Pending.
-  - [sh, -c, "curl -fsSL -o /root/kube-flannel.yml https://github.com/flannel-io/flannel/releases/download/${flannel_version}/kube-flannel.yml && echo '${flannel_manifest_sha256}  /root/kube-flannel.yml' | sha256sum -c -"]
-  - [sh, -c, "KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply -f /root/kube-flannel.yml"]
+  # Flannel is pinned by release and verified by checksum. Keep download,
+  # verification, and apply in one fail-fast command so a transient download
+  # failure cannot fall through to kubectl with a missing manifest.
+  - [sh, -c, "curl --retry 10 --retry-all-errors --retry-delay 5 --connect-timeout 15 -fsSL -o /root/kube-flannel.yml https://github.com/flannel-io/flannel/releases/download/${flannel_version}/kube-flannel.yml && echo '${flannel_manifest_sha256}  /root/kube-flannel.yml' | sha256sum -c - && KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply -f /root/kube-flannel.yml"]

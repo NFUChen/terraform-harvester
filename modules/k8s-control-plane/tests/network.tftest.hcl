@@ -10,9 +10,16 @@ variables {
   }
 
   load_balancer = {
-    address = "192.168.18.240"
-    subnet  = "192.168.18.1/24"
-    gateway = "192.168.18.1"
+    address            = "192.168.18.240"
+    subnet             = "192.168.18.1/24"
+    gateway            = "192.168.18.1"
+    harvester_pod_cidr = "10.52.0.0/16"
+  }
+
+  kubeconfig_export = {
+    enabled          = false
+    private_key_path = "/tmp/test-key"
+    output_path      = "/tmp/test-kubeconfig"
   }
 }
 
@@ -93,6 +100,16 @@ run "static_address_reaches_every_consumer" {
     condition     = strcontains(local.network_data, "172.16.100.1")
     error_message = "Cloud-init network data must configure the configured default gateway."
   }
+
+  assert {
+    condition     = strcontains(local.network_data, "10.52.0.0/16") && strcontains(local.network_data, "192.168.18.0/24")
+    error_message = "The management NIC must route both Harvester LB probes and management clients back through the masquerade gateway."
+  }
+
+  assert {
+    condition     = strcontains(local.network_data, "10.0.2.1")
+    error_message = "Management return routes must use the KubeVirt masquerade guest gateway."
+  }
 }
 
 run "gateway_outside_subnet_rejected" {
@@ -128,9 +145,10 @@ run "load_balancer_gateway_outside_subnet_rejected" {
 
   variables {
     load_balancer = {
-      address = "192.168.18.240"
-      subnet  = "192.168.18.1/24"
-      gateway = "10.0.0.1"
+      address            = "192.168.18.240"
+      subnet             = "192.168.18.1/24"
+      gateway            = "10.0.0.1"
+      harvester_pod_cidr = "10.52.0.0/16"
     }
   }
 

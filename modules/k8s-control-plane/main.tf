@@ -23,6 +23,8 @@ locals {
     var.load_balancer.address,
   ])
 
+  management_client_cidr = cidrsubnet(var.load_balancer.subnet, 0, 0)
+
   user_data = templatefile("${path.module}/userdata.yaml", {
     control_plane_ip        = local.control_plane_ip
     apiserver_cert_sans     = local.load_balancer_cert_sans
@@ -51,6 +53,20 @@ locals {
           use-routes = false
           use-dns    = false
         }
+        # LB health checks originate in the Harvester pod CIDR, while actual
+        # API clients arrive from the management LAN. Both enter through the
+        # masquerade NIC, so explicit routes prevent replies from escaping via
+        # the cluster VLAN default route.
+        routes = [
+          {
+            to  = var.load_balancer.harvester_pod_cidr
+            via = var.load_balancer.management_guest_gateway
+          },
+          {
+            to  = local.management_client_cidr
+            via = var.load_balancer.management_guest_gateway
+          },
+        ]
       }
       cluster = {
         match = {
@@ -151,6 +167,17 @@ resource "harvester_loadbalancer" "control_plane" {
     backend_port = 6443
   }
 
+  dynamic "listener" {
+    for_each = var.kubeconfig_export.enabled ? [1] : []
+
+    content {
+      name         = "ssh"
+      port         = var.kubeconfig_export.ssh_port
+      protocol     = "tcp"
+      backend_port = 22
+    }
+  }
+
   healthcheck {
     port              = 6443
     success_threshold = 1
@@ -160,4 +187,60 @@ resource "harvester_loadbalancer" "control_plane" {
   }
 
   depends_on = [module.control_plane]
+}
+
+resource "terraform_data" "kubeconfig_export" {
+  count = var.kubeconfig_export.enabled ? 1 : 0
+
+  triggers_replace = {
+    control_plane_id = module.control_plane.ids[module.control_plane.instance_names[0]]
+    load_balancer_ip = harvester_loadbalancer.control_plane.ip_address
+    api_port         = tostring(var.load_balancer.listener_port)
+    ssh_port         = tostring(var.kubeconfig_export.ssh_port)
+    output_path      = var.kubeconfig_export.output_path
+  }
+
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+    environment = {
+      API_ENDPOINT     = "https://${harvester_loadbalancer.control_plane.ip_address}:${var.load_balancer.listener_port}"
+      KUBECONFIG_PATH  = pathexpand(var.kubeconfig_export.output_path)
+      PRIVATE_KEY_PATH = pathexpand(var.kubeconfig_export.private_key_path)
+      SOURCE_ENDPOINT  = "https://${local.control_plane_ip}:6443"
+      SSH_HOST         = harvester_loadbalancer.control_plane.ip_address
+      SSH_PORT         = tostring(var.kubeconfig_export.ssh_port)
+      SSH_USER         = var.kubeconfig_export.ssh_user
+    }
+
+    command = <<-SCRIPT
+      set -euo pipefail
+      umask 077
+      test -f "$PRIVATE_KEY_PATH"
+      mkdir -p "$(dirname "$KUBECONFIG_PATH")"
+
+      for attempt in $(seq 1 60); do
+        if ssh \
+          -o BatchMode=yes \
+          -o ConnectTimeout=5 \
+          -o StrictHostKeyChecking=accept-new \
+          -i "$PRIVATE_KEY_PATH" \
+          -p "$SSH_PORT" \
+          "$SSH_USER@$SSH_HOST" \
+          'test -s ~/.kube/config && cat ~/.kube/config' > "$KUBECONFIG_PATH.tmp"; then
+          break
+        fi
+        if [ "$attempt" -eq 60 ]; then
+          echo "Timed out waiting for control-plane kubeconfig over SSH" >&2
+          exit 1
+        fi
+        sleep 5
+      done
+
+      python3 -c 'import pathlib, sys; path = pathlib.Path(sys.argv[1]); path.write_text(path.read_text().replace(sys.argv[2], sys.argv[3]))' "$KUBECONFIG_PATH.tmp" "$SOURCE_ENDPOINT" "$API_ENDPOINT"
+      install -m 0600 "$KUBECONFIG_PATH.tmp" "$KUBECONFIG_PATH"
+      rm -f "$KUBECONFIG_PATH.tmp"
+    SCRIPT
+  }
+
+  depends_on = [harvester_loadbalancer.control_plane]
 }
