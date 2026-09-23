@@ -37,6 +37,29 @@ run "safe_storage_topology" {
   }
 
   assert {
+    condition = alltrue([
+      for instance, fingerprint in local.storage_fingerprint_by_instance :
+      fingerprint == sha256(jsonencode({
+        root_disk        = local.root_disk
+        ephemeral_disks  = local.ephemeral_disk_list
+        persistent_disks = local.persistent_disks_by_instance[instance]
+        cdroms           = local.cdrom_list
+      }))
+    ])
+    error_message = "The replacement fingerprint must cover every caller-configurable disk category, because lifecycle.ignore_changes hides raw disk drift such as the provider-generated cloudinitdisk."
+  }
+
+  assert {
+    condition = local.storage_fingerprint_by_instance["test-01"] != sha256(jsonencode({
+      root_disk        = merge(local.root_disk, { size = "999Gi" })
+      ephemeral_disks  = local.ephemeral_disk_list
+      persistent_disks = local.persistent_disks_by_instance["test-01"]
+      cdroms           = local.cdrom_list
+    }))
+    error_message = "A root disk change must alter the fingerprint so ignored disk drift cannot mask a real storage change."
+  }
+
+  assert {
     condition = alltrue(flatten([
       for vm in harvester_virtualmachine.this : [
         for disk in vm.disk : disk.name != "cache" || disk.auto_delete

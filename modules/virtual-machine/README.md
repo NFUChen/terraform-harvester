@@ -19,6 +19,13 @@ persistent PVC mapping, or CD-ROM topology changes a per-VM storage
 fingerprint. Terraform then plans a VM replacement instead of attempting an
 in-place update that Harvester's webhook would reject.
 
+Provider 1.9.0 imports Harvester's generated `cloudinitdisk` into the resource
+`disk` list even though configuration declares it through the separate
+`cloudinit` block. The module ignores raw `disk` drift to eliminate this
+permanent phantom diff. This does not hide caller storage changes: all
+caller-configurable disk categories are included in the replacement
+fingerprint above.
+
 A replacement deletes the VM-owned root and ephemeral PVCs. Persistent PVCs
 are externally managed and reattached to the replacement VM.
 
