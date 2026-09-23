@@ -55,10 +55,25 @@ The long-running gateway container is non-privileged with only `NET_ADMIN` and
 
 ```sh
 iptables -t nat -A POSTROUTING -s <cidr> -o eth0 -j MASQUERADE
+iptables -t mangle -A FORWARD -i net1 -o eth0 \
+  -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
 iptables -A FORWARD -i net1 -o eth0 -s <cidr> -j ACCEPT
 iptables -A FORWARD -i eth0 -o net1 -d <cidr> \
   -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 ```
+
+## MTU and MSS clamping
+
+The VLAN side runs at MTU 1500 while the Pod-network egress (`eth0`) is
+smaller — 1450 on Harvester. Without MSS clamping, a VM advertises an MSS
+derived from its own 1500-byte link, the reply exceeds the egress MTU, and the
+resulting `Frag needed` ICMP is frequently dropped upstream. The connection
+then completes its TCP handshake and stalls on the first large payload.
+
+The symptom is misleading: small requests such as `apt` metadata succeed while
+TLS handshakes to endpoints with large certificate chains fail with
+`SSL connection timeout`. The clamp rule above removes this PMTU black hole by
+rewriting the MSS on forwarded SYNs to match the real path MTU.
 
 ## Image
 

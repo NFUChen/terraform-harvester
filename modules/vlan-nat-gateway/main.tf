@@ -69,6 +69,7 @@ resource "kubernetes_deployment_v1" "gateway" {
             ip link set net1 up
             ip addr replace ${local.gateway_ip}/${local.prefix_length} dev net1
             iptables -t nat -C POSTROUTING -s ${var.cidr} -o eth0 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s ${var.cidr} -o eth0 -j MASQUERADE
+            iptables -t mangle -C FORWARD -i net1 -o eth0 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || iptables -t mangle -A FORWARD -i net1 -o eth0 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
             iptables -C FORWARD -i net1 -o eth0 -s ${var.cidr} -j ACCEPT 2>/dev/null || iptables -A FORWARD -i net1 -o eth0 -s ${var.cidr} -j ACCEPT
             iptables -C FORWARD -i eth0 -o net1 -d ${var.cidr} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || iptables -A FORWARD -i eth0 -o net1 -d ${var.cidr} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
             exec sleep infinity
@@ -90,7 +91,7 @@ resource "kubernetes_deployment_v1" "gateway" {
           }
           readiness_probe {
             exec {
-              command = ["/bin/sh", "-ec", "ip -4 addr show dev net1 | grep -F 'inet ${local.gateway_ip}/${local.prefix_length}' >/dev/null && iptables -t nat -C POSTROUTING -s ${var.cidr} -o eth0 -j MASQUERADE"]
+              command = ["/bin/sh", "-ec", "ip -4 addr show dev net1 | grep -F 'inet ${local.gateway_ip}/${local.prefix_length}' >/dev/null && iptables -t nat -C POSTROUTING -s ${var.cidr} -o eth0 -j MASQUERADE && iptables -t mangle -C FORWARD -i net1 -o eth0 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu"]
             }
             initial_delay_seconds = 2
             period_seconds        = 5

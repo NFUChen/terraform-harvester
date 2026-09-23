@@ -24,6 +24,13 @@ run "valid_gateway" {
     error_message = "startup must configure NAT"
   }
   assert {
+    condition = strcontains(
+      join(" ", kubernetes_deployment_v1.gateway.spec[0].template[0].spec[0].container[0].args),
+      "TCPMSS --clamp-mss-to-pmtu",
+    )
+    error_message = "startup must clamp TCP MSS to the path MTU; without this, TLS handshakes over the VLAN silently hang whenever the egress MTU is smaller than 1500 (e.g. Harvester pod-network at 1450)."
+  }
+  assert {
     condition     = kubernetes_deployment_v1.gateway.spec[0].template[0].spec[0].init_container[0].security_context[0].privileged == true
     error_message = "a privileged one-shot init container must enable ip_forward in the Pod network namespace"
   }
