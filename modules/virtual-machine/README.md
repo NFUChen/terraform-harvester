@@ -126,11 +126,12 @@ CD-ROMs are separate from data disks and support only SATA or SCSI buses.
 
 ## Replacement and availability
 
-Storage topology changes replace the affected VM. Because old and new VMs use
-the same Kubernetes name, `create_before_destroy` cannot be used. A pool-wide
-image change may replace all instances concurrently and cause an outage.
-Production rollouts should use two module calls with different prefixes
-(blue/green), move traffic, and then retire the old pool.
+Storage topology and cloud-init configuration changes replace the affected
+VM. Because old and new VMs use the same Kubernetes name,
+`create_before_destroy` cannot be used. A pool-wide image change may replace
+all instances concurrently and cause an outage. Production rollouts should
+use two module calls with different prefixes (blue/green), move traffic, and
+then retire the old pool.
 
 Reducing `instance_count` destroys the highest-numbered instances and their
 root/ephemeral PVCs. Review every saved plan before applying a scale-down.
@@ -140,6 +141,16 @@ root/ephemeral PVCs. Review every saved plan before applying a scale-down.
 The module creates one `harvester_cloudinit_secret` per VM. Avoid plaintext
 passwords because user data is stored in Terraform state and a Kubernetes
 Secret. Prefer SSH public keys and encrypted remote state.
+
+Cloud-init is only read by the guest on first boot. Provider 1.9.0's VM
+resource references the Secret only by its static name, so an in-place
+Secret update alone would silently do nothing to a running VM. The module
+hashes `enabled`, `type`, `user_data`, and `network_data` into a fingerprint
+and wires it through `replace_triggered_by`, the same mechanism used for
+storage, so any real cloud-init change replaces the VM instead of leaving it
+running stale configuration. The trigger stores a digest, not the raw
+payload, so cloud-init content is never duplicated into that resource's
+state or plan output.
 
 ## Outputs
 
@@ -162,4 +173,4 @@ terraform test
 ```
 
 Tests cover storage ownership, per-instance persistent PVC mapping, reserved
-disk names, and CD-ROM rendering.
+disk names, CD-ROM rendering, and the cloud-init replacement fingerprint.

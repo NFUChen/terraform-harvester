@@ -115,6 +115,19 @@ locals {
       cdroms           = local.cdrom_list
     }))
   }
+
+  # The VM's cloudinit block only references a static Secret name, so editing
+  # the payload updates harvester_cloudinit_secret in place and leaves the VM
+  # untouched. A guest only reads cloud-init on first boot, making that
+  # in-place update a no-op for the running VM. Hash the effective cloud-init
+  # config so any real change replaces the VM instead. The value is a digest,
+  # so cloud-init content is never duplicated into the trigger's plan output.
+  cloudinit_fingerprint = sha256(jsonencode({
+    enabled      = var.cloudinit.enabled
+    type         = var.cloudinit.type
+    user_data    = var.cloudinit.user_data
+    network_data = var.cloudinit.network_data
+  }))
 }
 
 data "harvester_image" "referenced" {
@@ -128,6 +141,10 @@ resource "terraform_data" "storage_topology" {
   for_each = toset(local.instance_names)
 
   input = local.storage_fingerprint_by_instance[each.key]
+}
+
+resource "terraform_data" "cloudinit_configuration" {
+  input = local.cloudinit_fingerprint
 }
 
 resource "harvester_cloudinit_secret" "this" {
@@ -276,6 +293,7 @@ resource "harvester_virtualmachine" "this" {
 
     replace_triggered_by = [
       terraform_data.storage_topology[each.key],
+      terraform_data.cloudinit_configuration,
     ]
 
     precondition {
