@@ -23,11 +23,12 @@ module "worker" {
   name      = each.key
   namespace = var.namespace
 
-  cpu    = var.cpu
-  memory = var.memory
+  cpu    = coalesce(each.value.cpu, var.cpu)
+  memory = coalesce(each.value.memory, var.memory)
 
-  root_image     = var.root_image
-  root_disk_size = var.root_disk_size
+  root_image       = var.root_image
+  root_disk_size   = var.root_disk_size
+  persistent_disks = each.value.persistent_disks
 
   network_interfaces = [
     {

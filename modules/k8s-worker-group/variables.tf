@@ -2,6 +2,15 @@ variable "instances" {
   description = "Worker VMs keyed by their exact stable name. Each address is a unique static VLAN address."
   type = map(object({
     address = string
+    cpu     = optional(number)
+    memory  = optional(string)
+    persistent_disks = optional(map(object({
+      existing_volume_name = string
+      bus                  = optional(string, "virtio")
+      cache_mode           = optional(string)
+      boot_order           = optional(number, 0)
+      hot_plug             = optional(bool, false)
+    })), {})
   }))
 
   validation {
@@ -18,8 +27,37 @@ variable "instances" {
   }
 
   validation {
+    condition = alltrue([
+      for instance in values(var.instances) :
+      instance.cpu == null || (instance.cpu >= 1 && floor(instance.cpu) == instance.cpu)
+    ])
+    error_message = "Each per-instance cpu override must be a positive integer."
+  }
+
+  validation {
+    condition = alltrue([
+      for instance in values(var.instances) :
+      instance.memory == null || can(regex("^[0-9]+(\\.[0-9]+)?(Ei|Pi|Ti|Gi|Mi|Ki|E|P|T|G|M|K)?$", instance.memory))
+    ])
+    error_message = "Each per-instance memory override must be a Kubernetes quantity such as 4Gi or 4096Mi."
+  }
+
+  validation {
     condition     = length(distinct([for instance in values(var.instances) : instance.address])) == length(var.instances)
     error_message = "Every worker must have a unique static address."
+  }
+
+  validation {
+    condition = length(flatten([
+      for instance in values(var.instances) : [
+        for disk in values(instance.persistent_disks) : disk.existing_volume_name
+      ]
+      ])) == length(distinct(flatten([
+        for instance in values(var.instances) : [
+          for disk in values(instance.persistent_disks) : disk.existing_volume_name
+        ]
+    ])))
+    error_message = "A persistent volume may be attached to only one worker in the group."
   }
 }
 

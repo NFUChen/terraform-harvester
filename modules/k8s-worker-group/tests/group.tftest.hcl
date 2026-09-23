@@ -2,11 +2,17 @@ mock_provider "harvester" {}
 
 variables {
   instances = {
-    k8s-worker-01 = { address = "172.16.100.20/24" }
+    k8s-worker-01 = {
+      address = "172.16.100.20/24"
+      cpu     = 4
+      memory  = "8Gi"
+    }
     k8s-worker-02 = { address = "172.16.100.21/24" }
     k8s-worker-03 = { address = "172.16.100.22/24" }
   }
 
+  cpu        = 2
+  memory     = "4Gi"
   root_image = "harvester-public/ubuntu"
 
   network = {
@@ -49,6 +55,23 @@ run "three_worker_group" {
   }
 
   assert {
+    condition = (
+      module.worker["k8s-worker-01"].cpu == 4 &&
+      module.worker["k8s-worker-01"].memory == "8Gi"
+    )
+    error_message = "A per-instance compute override must size only that worker."
+  }
+
+  assert {
+    condition = alltrue([
+      for name in ["k8s-worker-02", "k8s-worker-03"] :
+      module.worker[name].cpu == 2 &&
+      module.worker[name].memory == "4Gi"
+    ])
+    error_message = "Workers without an override must inherit the group defaults."
+  }
+
+  assert {
     condition     = one(harvester_loadbalancer.workers.backend_selector).values == tolist(["k8s-worker-01", "k8s-worker-02", "k8s-worker-03"])
     error_message = "The LoadBalancer must select all and only worker VMs."
   }
@@ -64,12 +87,70 @@ run "three_worker_group" {
   }
 }
 
+run "duplicate_volume_attachment_rejected" {
+  command = plan
+
+  variables {
+    instances = {
+      k8s-worker-01 = {
+        address = "172.16.100.20/24"
+        persistent_disks = {
+          data = { existing_volume_name = "app-data" }
+        }
+      }
+      k8s-worker-02 = {
+        address = "172.16.100.21/24"
+        persistent_disks = {
+          data = { existing_volume_name = "app-data" }
+        }
+      }
+    }
+  }
+
+  expect_failures = [var.instances]
+}
+
+run "invalid_instance_cpu_rejected" {
+  command = plan
+
+  variables {
+    instances = {
+      k8s-worker-01 = {
+        address = "172.16.100.20/24"
+        cpu     = 0
+      }
+    }
+  }
+
+  expect_failures = [var.instances]
+}
+
+run "invalid_instance_memory_rejected" {
+  command = plan
+
+  variables {
+    instances = {
+      k8s-worker-01 = {
+        address = "172.16.100.20/24"
+        memory  = "lots"
+      }
+    }
+  }
+
+  expect_failures = [var.instances]
+}
+
 run "duplicate_worker_addresses_rejected" {
   command = plan
 
   variables {
     instances = {
-      k8s-worker-01 = { address = "172.16.100.20/24" }
+      k8s-worker-01 = {
+        address = "172.16.100.20/24"
+        persistent_disks = {
+          appdata = { existing_volume_name = "app-data" }
+        }
+      }
       k8s-worker-02 = { address = "172.16.100.20/24" }
     }
   }

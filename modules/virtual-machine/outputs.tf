@@ -8,6 +8,16 @@ output "id" {
   value       = harvester_virtualmachine.this.id
 }
 
+output "cpu" {
+  description = "vCPU cores assigned to the VM."
+  value       = harvester_virtualmachine.this.cpu
+}
+
+output "memory" {
+  description = "Memory assigned to the VM."
+  value       = harvester_virtualmachine.this.memory
+}
+
 output "node_name" {
   description = "Harvester node currently running the VM. Empty until the VM is scheduled."
   value       = harvester_virtualmachine.this.node_name
