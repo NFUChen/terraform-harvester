@@ -56,13 +56,12 @@ resource "harvester_network" "this" {
     # restarted VMs across VLANs.
     prevent_destroy = true
 
-    # VLAN and ClusterNetwork identify physical topology. Existing running
-    # Pods are not necessarily reconfigured when the NAD changes; restarted
-    # Pods consume the new config. Freeze these values and perform topology
-    # changes as blue/green migration to a new network name.
-    ignore_changes = [
-      vlan_id,
-      cluster_network_name,
-    ]
+    # Harvester's controller mutates labels and auto-route fields after create.
+    # Provider 1.9.0 then imports those values into Optional+Computed state and
+    # feeds them back into any later Update, where route_mode=auto plus the
+    # computed CIDR/gateway fails constructor validation. Treat production
+    # NADs as create-once objects: every config/controller drift is ignored,
+    # and any intended change is a blue/green migration to a new network name.
+    ignore_changes = all
   }
 }

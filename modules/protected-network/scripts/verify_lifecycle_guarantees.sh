@@ -2,9 +2,9 @@
 # Reproducible, read-only proof of protected-network's lifecycle guarantees:
 #   1. prevent_destroy rejects `terraform plan -destroy` against an existing
 #      network.
-#   2. ignore_changes suppresses vlan_id and cluster_network_name drift while
-#      a known mutable description difference proves Terraform actually
-#      compared the fabricated resource state.
+#   2. ignore_changes=all suppresses controller-managed labels/auto-route
+#      state and every caller-side edit, avoiding provider 1.9.0's
+#      Optional+Computed route state feedback bug.
 #
 # The script never applies or destroys infrastructure. It performs a live,
 # read-only ClusterNetwork data-source lookup, so it requires cluster access.
@@ -56,8 +56,10 @@ module "net" {
 
   networks = {
     "verify-lifecycle-guard" = {
+      # Deliberately differs from fabricated state. ignore_changes=all must
+      # keep the live/create-time values and produce a no-op plan.
       vlan_id     = 200
-      description = "mutable-positive-control"
+      description = "caller-side-edit-that-must-be-ignored"
     }
   }
 }
@@ -96,14 +98,20 @@ state = {
                 # ignore_changes must retain this state value without a lookup.
                 "cluster_network_name": "legacy-network",
                 "route_mode": "auto",
-                "route_cidr": "",
-                "route_gateway": "",
+                # Simulate values auto-discovered and written by the Harvester
+                # controller, then imported into Optional+Computed state.
+                "route_cidr": "192.0.2.0/24",
+                "route_gateway": "192.0.2.1",
                 "route_dhcp_server_ip": "",
-                "route_connectivity": "",
-                "config": "{}",
-                # Deliberately mutable so the plan has a positive-control diff.
-                "description": None,
-                "labels": {},
+                "route_connectivity": "reachable",
+                "config": "{\"vlan\":100}",
+                "description": "create-time-description",
+                "labels": {
+                    "network.harvesterhci.io/clusternetwork": "legacy-network",
+                    "network.harvesterhci.io/ready": "true",
+                    "network.harvesterhci.io/type": "L2VlanNetwork",
+                    "network.harvesterhci.io/vlan-id": "100",
+                },
                 "tags": {},
                 "message": "",
                 "state": "active",
@@ -138,7 +146,7 @@ if ! grep -q "Instance cannot be destroyed" "${DESTROY_LOG}"; then
 fi
 echo "PASS: destroy correctly rejected by prevent_destroy"
 
-echo "=== Guarantee 2: topology drift is ignored ==="
+echo "=== Guarantee 2: controller drift and all caller edits are ignored ==="
 terraform plan -refresh=false -input=false -out="${WORKDIR}/update.tfplan" >/dev/null
 terraform show -json "${WORKDIR}/update.tfplan" >"${WORKDIR}/update-plan.json"
 python3 - "${WORKDIR}/update-plan.json" <<'PY'
@@ -151,16 +159,23 @@ changes = [
 if len(changes) != 1:
     raise SystemExit(f"FAIL: expected one network resource change, got {len(changes)}")
 change = changes[0]["change"]
-if change["actions"] != ["update"]:
-    raise SystemExit(f"FAIL: expected positive-control update, got {change['actions']}")
+if change["actions"] != ["no-op"]:
+    raise SystemExit(f"FAIL: expected a no-op plan for the create-once NAD, got {change['actions']}")
 before, after = change["before"], change["after"]
-if after.get("description") != "mutable-positive-control":
-    raise SystemExit("FAIL: mutable description positive control did not appear")
-if before.get("vlan_id") != 100 or after.get("vlan_id") != 100:
-    raise SystemExit("FAIL: vlan_id was not frozen at state value 100")
-if before.get("cluster_network_name") != "legacy-network" or after.get("cluster_network_name") != "legacy-network":
-    raise SystemExit("FAIL: cluster_network_name was not frozen at state value legacy-network")
-print("PASS: mutable description diff proves comparison occurred; VLAN and ClusterNetwork remained frozen")
+expected = {
+    "vlan_id": 100,
+    "cluster_network_name": "legacy-network",
+    "description": "create-time-description",
+    "route_mode": "auto",
+    "route_cidr": "192.0.2.0/24",
+    "route_gateway": "192.0.2.1",
+}
+for key, value in expected.items():
+    if before.get(key) != value or after.get(key) != value:
+        raise SystemExit(f"FAIL: {key} did not remain frozen at state value {value!r}")
+if after.get("labels", {}).get("network.harvesterhci.io/ready") != "true":
+    raise SystemExit("FAIL: controller-managed labels were not retained as no-op state")
+print("PASS: caller edits and controller-managed label/auto-route state produce a no-op plan")
 PY
 
 popd >/dev/null
