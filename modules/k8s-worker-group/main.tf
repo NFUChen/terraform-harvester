@@ -60,10 +60,19 @@ module "worker" {
 
   cloudinit = {
     user_data = templatefile("${path.module}/userdata.yaml", {
-      cluster_generation   = var.cluster_generation
-      join_command         = var.join_command
-      kubernetes_version   = var.kubernetes_version
-      node_ip              = split("/", each.value.address)[0]
+      cluster_generation = var.cluster_generation
+      join_command       = var.join_command
+      kubernetes_version = var.kubernetes_version
+      node_ip            = split("/", each.value.address)[0]
+      persistent_mounts = [
+        for disk_name, disk in each.value.persistent_disks : {
+          name       = disk_name
+          device     = disk.device
+          filesystem = disk.filesystem
+          mount_path = disk.mount_path
+        }
+        if disk.device != null
+      ]
       ssh_authorized_keys  = var.ssh_authorized_keys
       ubuntu_password_hash = random_password.ubuntu.bcrypt_hash
     })

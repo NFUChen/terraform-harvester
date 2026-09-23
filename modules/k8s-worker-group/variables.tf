@@ -10,6 +10,9 @@ variable "instances" {
       cache_mode           = optional(string)
       boot_order           = optional(number, 0)
       hot_plug             = optional(bool, false)
+      device               = optional(string)
+      filesystem           = optional(string)
+      mount_path           = optional(string)
     })), {})
   }))
 
@@ -45,6 +48,40 @@ variable "instances" {
   validation {
     condition     = length(distinct([for instance in values(var.instances) : instance.address])) == length(var.instances)
     error_message = "Every worker must have a unique static address."
+  }
+
+  validation {
+    condition = alltrue(flatten([
+      for instance in values(var.instances) : [
+        for disk in values(instance.persistent_disks) :
+        (disk.device == null && disk.filesystem == null && disk.mount_path == null) ||
+        (disk.device != null && disk.filesystem != null && disk.mount_path != null)
+      ]
+    ]))
+    error_message = "Persistent disk mount settings device, filesystem, and mount_path must be provided together."
+  }
+
+  validation {
+    condition = alltrue(flatten([
+      for instance in values(var.instances) : [
+        for disk in values(instance.persistent_disks) :
+        disk.filesystem == null || contains(["ext4", "xfs"], disk.filesystem)
+      ]
+    ]))
+    error_message = "Persistent disk filesystem must be ext4 or xfs."
+  }
+
+  validation {
+    condition = alltrue(flatten([
+      for instance in values(var.instances) : [
+        for disk in values(instance.persistent_disks) :
+        disk.device == null || (
+          can(regex("^/dev/[a-zA-Z0-9._/-]+$", disk.device)) &&
+          can(regex("^/[a-zA-Z0-9._/-]+$", disk.mount_path))
+        )
+      ]
+    ]))
+    error_message = "Persistent disk device must be under /dev and mount_path must be absolute."
   }
 
   validation {

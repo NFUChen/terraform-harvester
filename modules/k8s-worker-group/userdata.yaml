@@ -41,6 +41,29 @@ write_files:
     permissions: "0644"
     content: |
       KUBELET_EXTRA_ARGS=--node-ip=${node_ip}
+%{ if length(persistent_mounts) > 0 ~}
+  - path: /usr/local/bin/mount-persistent-disks.sh
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      # Idempotent: only formats a disk that has no filesystem yet, so a
+      # replacement VM that reattaches the same PVC never wipes existing data.
+      set -eu
+%{ for mount in persistent_mounts ~}
+      DEVICE="${mount.device}"
+      MOUNT_PATH="${mount.mount_path}"
+      FILESYSTEM="${mount.filesystem}"
+      if ! blkid "$DEVICE" >/dev/null 2>&1; then
+        mkfs.$FILESYSTEM "$DEVICE"
+      fi
+      UUID="$(blkid -s UUID -o value "$DEVICE")"
+      mkdir -p "$MOUNT_PATH"
+      if ! grep -q "^UUID=$UUID " /etc/fstab; then
+        echo "UUID=$UUID $MOUNT_PATH $FILESYSTEM defaults,nofail 0 2" >> /etc/fstab
+      fi
+      mount "$MOUNT_PATH"
+%{ endfor ~}
+%{ endif ~}
   - path: /usr/local/bin/worker-http.py
     permissions: "0755"
     content: |
@@ -89,8 +112,14 @@ runcmd:
   - [sh, -c, "echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v${kubernetes_version}/deb/ /' > /etc/apt/sources.list.d/kubernetes.list"]
   - [apt-get, update]
   - [apt-get, install, -y, containerd, kubelet, kubeadm, qemu-guest-agent, conntrack, ipset, ebtables, ethtool, socat]
+%{ if length([for mount in persistent_mounts : mount if mount.filesystem == "xfs"]) > 0 ~}
+  - [apt-get, install, -y, xfsprogs]
+%{ endif ~}
   - [apt-mark, hold, kubelet, kubeadm]
   - [systemctl, enable, --now, containerd]
   - [systemctl, start, qemu-guest-agent]
   - [systemctl, enable, --now, worker-http]
+%{ if length(persistent_mounts) > 0 ~}
+  - [/usr/local/bin/mount-persistent-disks.sh]
+%{ endif ~}
   - [sh, -c, "${join_command}"]

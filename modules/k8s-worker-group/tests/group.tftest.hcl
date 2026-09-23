@@ -120,6 +120,48 @@ run "duplicate_volume_attachment_rejected" {
   expect_failures = [var.instances]
 }
 
+run "partial_mount_settings_rejected" {
+  command = plan
+
+  variables {
+    instances = {
+      k8s-worker-01 = {
+        address = "172.16.100.20/24"
+        persistent_disks = {
+          appdata = {
+            existing_volume_name = "app-data"
+            mount_path           = "/mnt/app-data"
+          }
+        }
+      }
+    }
+  }
+
+  expect_failures = [var.instances]
+}
+
+run "unsupported_filesystem_rejected" {
+  command = plan
+
+  variables {
+    instances = {
+      k8s-worker-01 = {
+        address = "172.16.100.20/24"
+        persistent_disks = {
+          appdata = {
+            existing_volume_name = "app-data"
+            device               = "/dev/vdb"
+            filesystem           = "btrfs"
+            mount_path           = "/mnt/app-data"
+          }
+        }
+      }
+    }
+  }
+
+  expect_failures = [var.instances]
+}
+
 run "invalid_instance_cpu_rejected" {
   command = plan
 
