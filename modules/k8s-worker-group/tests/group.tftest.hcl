@@ -1,5 +1,14 @@
 mock_provider "harvester" {}
 
+mock_provider "random" {
+  mock_resource "random_password" {
+    defaults = {
+      result      = "MockWorkerPassword-123!"
+      bcrypt_hash = "$2a$10$mockedWorkerPasswordHash"
+    }
+  }
+}
+
 variables {
   instances = {
     k8s-worker-01 = {
@@ -80,6 +89,7 @@ run "three_worker_group" {
     condition     = harvester_loadbalancer.workers.listener[0].port == 80 && harvester_loadbalancer.workers.listener[0].backend_port == 80
     error_message = "The test LoadBalancer must forward HTTP port 80 to worker port 80."
   }
+
 
   assert {
     condition     = harvester_ippool.workers.range[0].start == "192.168.18.241" && harvester_ippool.workers.range[0].end == "192.168.18.241"

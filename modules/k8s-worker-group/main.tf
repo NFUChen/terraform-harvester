@@ -1,3 +1,15 @@
+# Workers in a group are homogeneous and already share one SSH key, user data,
+# and join token, so they share one console password too. Only the bcrypt hash
+# reaches cloud-init; the plaintext stays in state and the sensitive output.
+resource "random_password" "ubuntu" {
+  length      = 24
+  special     = true
+  min_lower   = 1
+  min_upper   = 1
+  min_numeric = 1
+  min_special = 1
+}
+
 locals {
   management_client_cidr = cidrsubnet(var.load_balancer.subnet, 0, 0)
 
@@ -48,11 +60,12 @@ module "worker" {
 
   cloudinit = {
     user_data = templatefile("${path.module}/userdata.yaml", {
-      cluster_generation  = var.cluster_generation
-      join_command        = var.join_command
-      kubernetes_version  = var.kubernetes_version
-      node_ip             = split("/", each.value.address)[0]
-      ssh_authorized_keys = var.ssh_authorized_keys
+      cluster_generation   = var.cluster_generation
+      join_command         = var.join_command
+      kubernetes_version   = var.kubernetes_version
+      node_ip              = split("/", each.value.address)[0]
+      ssh_authorized_keys  = var.ssh_authorized_keys
+      ubuntu_password_hash = random_password.ubuntu.bcrypt_hash
     })
 
     network_data = yamlencode({

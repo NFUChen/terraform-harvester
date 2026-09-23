@@ -11,6 +11,12 @@ output "worker_ips" {
   }
 }
 
+output "ubuntu_password" {
+  description = "Generated plaintext ubuntu password shared by the worker group. Stored in Terraform state; handle as a secret."
+  value       = random_password.ubuntu.result
+  sensitive   = true
+}
+
 output "load_balancer_ip" {
   description = "Management-facing HTTP LoadBalancer IP."
   value       = harvester_loadbalancer.workers.ip_address
