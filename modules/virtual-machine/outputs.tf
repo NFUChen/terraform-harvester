@@ -28,6 +28,11 @@ output "state" {
   value       = harvester_virtualmachine.this.state
 }
 
+output "run_strategy" {
+  description = "Configured KubeVirt VM run strategy."
+  value       = harvester_virtualmachine.this.run_strategy
+}
+
 output "network_interfaces" {
   description = "VM network interfaces, including resolved ip_address and interface_name once reported by the guest."
   value       = harvester_virtualmachine.this.network_interface

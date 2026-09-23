@@ -35,8 +35,9 @@ module "worker" {
   name      = each.key
   namespace = var.namespace
 
-  cpu    = coalesce(each.value.cpu, var.cpu)
-  memory = coalesce(each.value.memory, var.memory)
+  cpu          = coalesce(each.value.cpu, var.cpu)
+  memory       = coalesce(each.value.memory, var.memory)
+  run_strategy = "Always"
 
   root_image       = var.root_image
   root_disk_size   = var.root_disk_size

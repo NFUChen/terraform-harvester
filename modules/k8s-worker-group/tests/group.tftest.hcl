@@ -59,6 +59,16 @@ run "three_worker_group" {
   }
 
   assert {
+    condition     = alltrue([for worker in module.worker : worker.run_strategy == "Always"])
+    error_message = "Every worker VM must restart automatically with the Always run strategy."
+  }
+
+  assert {
+    condition     = strcontains(file("${path.module}/userdata.yaml"), "[systemctl, enable, kubelet]")
+    error_message = "Worker cloud-init must enable kubelet so it starts after a VM reboot."
+  }
+
+  assert {
     condition     = output.worker_ips["k8s-worker-01"] == "172.16.100.20" && output.worker_ips["k8s-worker-03"] == "172.16.100.22"
     error_message = "Each worker name must remain bound to its configured static IP."
   }

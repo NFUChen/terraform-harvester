@@ -131,6 +131,7 @@ runcmd:
   - [apt-get, install, -y, xfsprogs]
 %{ endif ~}
   - [apt-mark, hold, kubelet, kubeadm]
+  - [systemctl, enable, kubelet]
   - [systemctl, enable, --now, containerd]
   - [systemctl, start, qemu-guest-agent]
   - [systemctl, enable, --now, worker-http]
