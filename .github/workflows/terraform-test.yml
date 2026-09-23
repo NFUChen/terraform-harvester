@@ -46,4 +46,55 @@ jobs:
 
       - name: Terraform Test
         working-directory: ${{ matrix.module }}
-        run: terraform test
+        shell: bash
+        run: |
+          set +e
+          terraform test -no-color 2>&1 | tee terraform-test.log
+          status=${PIPESTATUS[0]}
+
+          if (( status != 0 )); then
+            {
+              echo "## Failed: \`${{ matrix.module }}\`"
+              echo
+              echo '```text'
+              cat terraform-test.log
+              echo '```'
+              echo
+            } > terraform-test-summary.md
+          else
+            : > terraform-test-summary.md
+          fi
+
+          exit "$status"
+
+      - name: Upload test summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-test-summary-${{ strategy.job-index }}
+          path: ${{ matrix.module }}/terraform-test-summary.md
+          if-no-files-found: error
+
+  test-summary:
+    if: always()
+    needs: terraform-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download module summaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: terraform-test-summary-*
+          path: terraform-test-summaries
+          merge-multiple: true
+
+      - name: Write job summary
+        shell: bash
+        run: |
+          echo "# Terraform Test Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo >> "$GITHUB_STEP_SUMMARY"
+
+          if grep -q '^## Failed:' terraform-test-summaries/*.md; then
+            cat terraform-test-summaries/*.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "All Terraform tests passed." >> "$GITHUB_STEP_SUMMARY"
+          fi
