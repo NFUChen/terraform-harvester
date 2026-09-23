@@ -34,8 +34,33 @@ run "static_address_reaches_every_consumer" {
   }
 
   assert {
-    condition     = strcontains(local.user_data, "--apiserver-cert-extra-sans=172.16.100.10")
-    error_message = "The API server certificate must cover the configured static IP."
+    condition     = strcontains(local.user_data, "--apiserver-cert-extra-sans=172.16.100.10,192.168.18.240,192.168.18.241,192.168.18.242,192.168.18.243,192.168.18.244,192.168.18.245")
+    error_message = "The API server certificate must cover the cluster VLAN IP and every possible LoadBalancer pool address."
+  }
+
+  assert {
+    condition     = length(module.control_plane.network_interfaces["k8s-control-plane-01"]) == 2
+    error_message = "The control plane must have management and cluster interfaces."
+  }
+
+  assert {
+    condition     = harvester_ippool.control_plane.range[0].start == "192.168.18.240" && harvester_ippool.control_plane.range[0].end == "192.168.18.245"
+    error_message = "The default IP pool must use the agreed home-network reservation."
+  }
+
+  assert {
+    condition     = harvester_loadbalancer.control_plane.ipam == "pool" && harvester_loadbalancer.control_plane.ippool == harvester_ippool.control_plane.name
+    error_message = "The control-plane LoadBalancer must allocate from its managed IP pool, never DHCP."
+  }
+
+  assert {
+    condition     = one(harvester_loadbalancer.control_plane.backend_selector).key == "harvesterhci.io/vmName"
+    error_message = "The LoadBalancer must select the exact control-plane VM by its stable Harvester VM name label."
+  }
+
+  assert {
+    condition     = harvester_loadbalancer.control_plane.listener[0].port == 6443 && harvester_loadbalancer.control_plane.listener[0].backend_port == 6443
+    error_message = "The management listener must forward TCP 6443 to kube-apiserver port 6443."
   }
 
   assert {

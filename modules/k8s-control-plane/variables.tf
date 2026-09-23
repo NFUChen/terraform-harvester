@@ -68,6 +68,40 @@ variable "network" {
   }
 }
 
+variable "load_balancer" {
+  description = "Management-facing Harvester LoadBalancer. address is a caller-owned fixed IP; subnet includes its prefix length."
+  type = object({
+    address       = string
+    subnet        = string
+    gateway       = string
+    name          = optional(string, "guest-k8s-control-plane")
+    listener_port = optional(number, 6443)
+    pool_name     = optional(string, "guest-k8s-control-plane")
+  })
+
+  validation {
+    condition     = var.load_balancer.listener_port >= 1 && var.load_balancer.listener_port <= 65535 && floor(var.load_balancer.listener_port) == var.load_balancer.listener_port
+    error_message = "load_balancer.listener_port must be an integer between 1 and 65535."
+  }
+
+  validation {
+    condition = alltrue([
+      can(cidrnetmask("${var.load_balancer.address}/32")),
+      can(cidrnetmask(var.load_balancer.subnet)),
+      can(cidrnetmask("${var.load_balancer.gateway}/32")),
+    ])
+    error_message = "load_balancer address, subnet, and gateway must be valid IPv4 values."
+  }
+
+  validation {
+    condition = alltrue([
+      for address in [var.load_balancer.address, var.load_balancer.gateway] :
+      try(cidrsubnet("${address}/${split("/", var.load_balancer.subnet)[1]}", 0, 0) == cidrsubnet(var.load_balancer.subnet, 0, 0), false)
+    ])
+    error_message = "load_balancer address and gateway must belong to load_balancer.subnet."
+  }
+}
+
 variable "ssh_authorized_keys" {
   description = "SSH public keys authorized for the ubuntu user."
   type        = list(string)
@@ -78,6 +112,25 @@ variable "kubernetes_version" {
   description = "Kubernetes package repository minor version."
   type        = string
   default     = "1.31"
+}
+
+variable "cni" {
+  description = "Flannel CNI release applied after kubeadm init. The manifest is verified against manifest_sha256 before it is applied."
+  type = object({
+    version         = optional(string, "v0.28.9")
+    manifest_sha256 = optional(string, "1c06a15a771009c263bdb1f51c928af46f7606fe969f3963652167938d536aaa")
+  })
+  default = {}
+
+  validation {
+    condition     = can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+$", var.cni.version))
+    error_message = "cni.version must be a pinned Flannel release such as v0.28.9."
+  }
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{64}$", var.cni.manifest_sha256))
+    error_message = "cni.manifest_sha256 must be the hex sha256 of the pinned kube-flannel.yml."
+  }
 }
 
 variable "pod_network_cidr" {

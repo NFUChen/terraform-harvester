@@ -33,6 +33,30 @@ write_files:
         runtime_type = "io.containerd.runc.v2"
         [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
           SystemdCgroup = true
+  - path: /root/kubeadm-init.yaml
+    permissions: "0600"
+    content: |
+      apiVersion: kubeadm.k8s.io/v1beta4
+      kind: InitConfiguration
+      bootstrapTokens:
+        - token: "${join_token}"
+          ttl: "0s"
+      localAPIEndpoint:
+        advertiseAddress: "${control_plane_ip}"
+      nodeRegistration:
+        kubeletExtraArgs:
+          - name: "node-ip"
+            value: "${control_plane_ip}"
+      ---
+      apiVersion: kubeadm.k8s.io/v1beta4
+      kind: ClusterConfiguration
+      networking:
+        podSubnet: "${pod_network_cidr}"
+      apiServer:
+        certSANs:
+%{ for san in split(",", apiserver_cert_sans) ~}
+          - "${san}"
+%{ endfor ~}
 
 runcmd:
   - [swapoff, -a]
@@ -49,5 +73,8 @@ runcmd:
   - [apt-mark, hold, kubelet, kubeadm, kubectl]
   - [systemctl, enable, --now, containerd]
   - [systemctl, enable, --now, qemu-guest-agent]
-  - [sh, -c, "kubeadm init --apiserver-advertise-address=${control_plane_ip} --apiserver-cert-extra-sans=${control_plane_ip} --token=${join_token} --token-ttl=0 --pod-network-cidr=${pod_network_cidr} && mkdir -p /home/ubuntu/.kube && cp /etc/kubernetes/admin.conf /home/ubuntu/.kube/config && chown -R ubuntu:ubuntu /home/ubuntu/.kube"]
-  
+  - [sh, -c, "kubeadm init --config=/root/kubeadm-init.yaml && mkdir -p /home/ubuntu/.kube && cp /etc/kubernetes/admin.conf /home/ubuntu/.kube/config && chown -R ubuntu:ubuntu /home/ubuntu/.kube"]
+  # Flannel is pinned by release and verified by checksum. Without a CNI every
+  # node stays NotReady and CoreDNS stays Pending.
+  - [sh, -c, "curl -fsSL -o /root/kube-flannel.yml https://github.com/flannel-io/flannel/releases/download/${flannel_version}/kube-flannel.yml && echo '${flannel_manifest_sha256}  /root/kube-flannel.yml' | sha256sum -c -"]
+  - [sh, -c, "KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply -f /root/kube-flannel.yml"]

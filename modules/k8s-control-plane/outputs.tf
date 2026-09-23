@@ -3,6 +3,21 @@ output "control_plane_ip" {
   value       = local.control_plane_ip
 }
 
+output "management_api_endpoint" {
+  description = "Kubernetes API endpoint for management clients, served by the Harvester LoadBalancer."
+  value       = "https://${harvester_loadbalancer.control_plane.ip_address}:${var.load_balancer.listener_port}"
+}
+
+output "load_balancer_ip" {
+  description = "IP address allocated to the control-plane LoadBalancer from the Harvester IP pool."
+  value       = harvester_loadbalancer.control_plane.ip_address
+}
+
+output "cluster_generation" {
+  description = "Opaque digest of the control-plane bootstrap configuration. Pass this to workers so a rebuilt control plane forces them to rejoin the new cluster CA."
+  value       = sha256(local.user_data)
+}
+
 output "join_token" {
   description = "Sensitive kubeadm bootstrap token for joining worker nodes."
   value       = local.join_token
