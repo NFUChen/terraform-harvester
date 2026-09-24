@@ -17,12 +17,3 @@ output "ubuntu_password" {
   sensitive   = true
 }
 
-output "load_balancer_ip" {
-  description = "Management-facing HTTP LoadBalancer IP."
-  value       = harvester_loadbalancer.workers.ip_address
-}
-
-output "http_endpoint" {
-  description = "HTTP endpoint balanced across all worker VM backends."
-  value       = "http://${harvester_loadbalancer.workers.ip_address}:${var.load_balancer.listener_port}"
-}

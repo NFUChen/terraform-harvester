@@ -104,7 +104,7 @@ variable "root_image" {
 }
 
 variable "namespace" {
-  description = "Harvester namespace in which to create workers and their LoadBalancer."
+  description = "Harvester namespace in which to create workers."
   type        = string
   default     = "default"
 }
@@ -134,32 +134,6 @@ variable "network" {
     gateway     = string
     dns_servers = optional(list(string), ["1.1.1.1", "8.8.8.8"])
   })
-}
-
-variable "load_balancer" {
-  description = "Management-facing Harvester LoadBalancer for the worker HTTP backends."
-  type = object({
-    address                  = string
-    subnet                   = string
-    gateway                  = string
-    harvester_pod_cidr       = string
-    management_guest_gateway = optional(string, "10.0.2.1")
-    name                     = optional(string, "k8s-workers")
-    pool_name                = optional(string, "k8s-workers")
-    listener_port            = optional(number, 80)
-    backend_port             = optional(number, 80)
-  })
-
-  validation {
-    condition = alltrue([
-      can(cidrnetmask("${var.load_balancer.address}/32")),
-      can(cidrnetmask(var.load_balancer.subnet)),
-      can(cidrnetmask("${var.load_balancer.gateway}/32")),
-      can(cidrnetmask(var.load_balancer.harvester_pod_cidr)),
-      can(cidrnetmask("${var.load_balancer.management_guest_gateway}/32")),
-    ])
-    error_message = "LoadBalancer addresses and CIDRs must be valid IPv4 values."
-  }
 }
 
 variable "cluster_generation" {

@@ -11,8 +11,6 @@ resource "random_password" "ubuntu" {
 }
 
 locals {
-  management_client_cidr = cidrsubnet(var.load_balancer.subnet, 0, 0)
-
   mac_seed = {
     for name in keys(var.instances) : name => md5("${var.namespace}/${name}")
   }
@@ -90,16 +88,6 @@ module "worker" {
             use-routes = false
             use-dns    = false
           }
-          routes = [
-            {
-              to  = var.load_balancer.harvester_pod_cidr
-              via = var.load_balancer.management_guest_gateway
-            },
-            {
-              to  = local.management_client_cidr
-              via = var.load_balancer.management_guest_gateway
-            },
-          ]
         }
         cluster = {
           match = {
@@ -122,46 +110,4 @@ module "worker" {
   tags = {
     "ssh-user" = "ubuntu"
   }
-}
-
-resource "harvester_ippool" "workers" {
-  name = var.load_balancer.pool_name
-
-  range {
-    start   = var.load_balancer.address
-    end     = var.load_balancer.address
-    subnet  = var.load_balancer.subnet
-    gateway = var.load_balancer.gateway
-  }
-}
-
-resource "harvester_loadbalancer" "workers" {
-  name      = var.load_balancer.name
-  namespace = var.namespace
-
-  ipam          = "pool"
-  ippool        = harvester_ippool.workers.name
-  workload_type = "vm"
-
-  backend_selector {
-    key    = "harvesterhci.io/vmName"
-    values = sort(keys(var.instances))
-  }
-
-  listener {
-    name         = "http"
-    port         = var.load_balancer.listener_port
-    protocol     = "tcp"
-    backend_port = var.load_balancer.backend_port
-  }
-
-  healthcheck {
-    port              = var.load_balancer.backend_port
-    success_threshold = 1
-    failure_threshold = 5
-    period_seconds    = 10
-    timeout_seconds   = 3
-  }
-
-  depends_on = [module.worker]
 }
