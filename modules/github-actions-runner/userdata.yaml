@@ -1,0 +1,65 @@
+#cloud-config
+package_update: true
+package_upgrade: false
+
+users:
+  - default
+  - name: ubuntu
+    groups: [adm, sudo]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+%{ for key in ssh_authorized_keys ~}
+      - ${key}
+%{ endfor ~}
+  - name: actions
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+
+write_files:
+  - path: /usr/local/sbin/configure-github-runner.sh
+    owner: root:root
+    permissions: "0700"
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      install -d -o actions -g actions /opt/actions-runner
+      cd /opt/actions-runner
+
+      curl --retry 10 --retry-all-errors --retry-delay 5 --connect-timeout 15 -fsSL \
+        -o actions-runner.tar.gz \
+        "https://github.com/actions/runner/releases/download/v${runner_version}/actions-runner-linux-x64-${runner_version}.tar.gz"
+      echo "${runner_sha256}  actions-runner.tar.gz" | sha256sum -c -
+      tar xzf actions-runner.tar.gz
+      rm actions-runner.tar.gz
+      chown -R actions:actions /opt/actions-runner
+
+      config_args=(
+        --unattended
+        --url '${github_url}'
+        --token '${registration_token}'
+        --name '${runner_name}'
+        --work _work
+        --replace
+%{ if runner_labels != "" ~}
+        --labels '${runner_labels}'
+%{ endif ~}
+%{ if runner_group != null ~}
+        --runnergroup '${runner_group}'
+%{ endif ~}
+      )
+
+      sudo -u actions ./config.sh "$${config_args[@]}"
+      ./svc.sh install actions
+      ./svc.sh start
+
+runcmd:
+  - [apt-get, install, -y, ca-certificates, curl, git, jq, qemu-guest-agent%{ if install_docker ~}, docker.io%{ endif ~}]
+  - [systemctl, enable, --now, qemu-guest-agent]
+%{ if install_docker ~}
+  - [systemctl, enable, --now, docker]
+  - [usermod, -aG, docker, actions]
+%{ endif ~}
+  - [/usr/local/sbin/configure-github-runner.sh]
