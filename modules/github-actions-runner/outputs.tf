@@ -1,19 +1,19 @@
-output "name" {
-  description = "Runner VM and GitHub Actions runner name."
-  value       = module.runner.name
+output "names" {
+  description = "GitHub Actions runner VM and agent names, one per registration token."
+  value       = local.runner_names
 }
 
-output "id" {
-  description = "Harvester VM resource ID."
-  value       = module.runner.id
+output "ids" {
+  description = "Harvester VM resource IDs keyed by runner name."
+  value       = { for name, runner in module.runner : name => runner.id }
 }
 
-output "primary_ip_address" {
-  description = "Runner VM primary IP address once reported by the guest."
-  value       = module.runner.primary_ip_address
+output "primary_ip_addresses" {
+  description = "Runner VM primary IP addresses keyed by runner name, once reported by the guest."
+  value       = { for name, runner in module.runner : name => runner.primary_ip_address }
 }
 
-output "state" {
-  description = "Terraform-derived runner VM state."
-  value       = module.runner.state
+output "states" {
+  description = "Terraform-derived runner VM states keyed by runner name."
+  value       = { for name, runner in module.runner : name => runner.state }
 }

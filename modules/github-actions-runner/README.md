@@ -1,6 +1,6 @@
 # github-actions-runner
 
-Creates one Ubuntu VM on Harvester and registers it as a persistent GitHub Actions self-hosted runner. The VM needs outbound HTTPS access to GitHub; no inbound Internet access is required.
+Creates one Ubuntu VM on Harvester per supplied registration token and registers each VM as a persistent GitHub Actions self-hosted runner. The VMs need outbound HTTPS access to GitHub; no inbound Internet access is required.
 
 ## Usage
 
@@ -8,19 +8,22 @@ Creates one Ubuntu VM on Harvester and registers it as a persistent GitHub Actio
 module "github_actions_runner" {
   source = "./modules/github-actions-runner"
 
-  name       = "github-actions-runner-01"
+  name       = "github-actions-runner"
   root_image = data.harvester_image.ubuntu_24_04_noble_cloud.id
   github_url = "https://github.com/example/example-repository"
 
-  # Create a short-lived registration token immediately before apply.
-  registration_token = var.github_runner_registration_token
+  # Comma-separated, short-lived tokens. This example creates
+  # github-actions-runner-01 and github-actions-runner-02.
+  registration_tokens = var.github_runner_registration_tokens
 
   ssh_authorized_keys = [file("~/.ssh/id_ed25519.pub")]
   labels              = ["harvester", "linux", "x64"]
 }
 ```
 
-The default management-network interface uses DHCP and masquerade networking. To attach the runner to a VLAN instead:
+A single token keeps the base `name`. Multiple tokens create runners suffixed with a stable two-digit index (`-01`, `-02`, and so on). Whitespace around each comma-separated token is ignored; empty entries are rejected.
+
+The default management-network interface uses DHCP and masquerade networking. To attach the runners to a VLAN instead:
 
 ```hcl
 network = {
@@ -28,12 +31,24 @@ network = {
 }
 ```
 
+## Included tools
+
+The runner installs a practical Ubuntu CI baseline rather than attempting to reproduce the entire GitHub-hosted runner image and toolcache:
+
+- GitHub CLI (`gh`) from GitHub's signed apt repository
+- Docker Engine and access for the `actions` user by default
+- Git, curl, wget, jq, SSH, rsync, tar, zip, and unzip
+- GCC/build tools and ShellCheck
+- Python 3, pip, and venv
+- Node.js and npm
+- OpenJDK 17
+
 ## Token lifecycle
 
-`registration_token` is a short-lived token generated in GitHub under repository or organization **Settings → Actions → Runners → New self-hosted runner**. It is only needed during first boot, but it is sensitive and is stored in Terraform state and the Harvester cloud-init Secret. Protect the state and namespace accordingly.
+`registration_tokens` contains short-lived tokens generated in GitHub under repository or organization **Settings → Actions → Runners → New self-hosted runner**. Supply one token per runner. The tokens are only needed during first boot, but remain sensitive because they are stored in Terraform state and Harvester cloud-init Secrets. Protect the state and namespace accordingly.
 
-Changing cloud-init inputs replaces the VM. Supply a fresh registration token before applying such a change. The runner uses `--replace`, so recreating the VM under the same name replaces the old GitHub registration.
+Changing cloud-init inputs replaces the VMs. Supply fresh registration tokens before applying such a change. Each runner uses `--replace`, so recreating a VM under the same name replaces the old GitHub registration.
 
 ## Network access
 
-Allow outbound TCP 443 and DNS. At minimum, the runner bootstrap and agent need GitHub release and Actions endpoints. Workflows may additionally need package registries, artifact storage, container registries, or deployment targets. The module opens no inbound Internet ports.
+Allow outbound TCP 443 and DNS. At minimum, runner bootstrap needs the GitHub CLI repository, GitHub releases, and Actions endpoints. Workflows may additionally need package registries, artifact storage, container registries, or deployment targets. The module opens no inbound Internet ports.

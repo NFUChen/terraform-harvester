@@ -1,11 +1,11 @@
 variable "name" {
-  description = "Exact name of the GitHub Actions runner VM and runner agent."
+  description = "Base name shared by the GitHub Actions runner VMs and runner agents. When more than one registration token is supplied, each runner is suffixed with a two-digit index, for example \"github-actions-runner-01\"."
   type        = string
   default     = "github-actions-runner"
 
   validation {
-    condition     = can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.name)) && length(var.name) <= 63
-    error_message = "name must be a lowercase DNS-compatible name no longer than 63 characters."
+    condition     = can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.name)) && length(var.name) <= 60
+    error_message = "name must be a lowercase DNS-compatible name no longer than 60 characters (room is reserved for a runner index suffix)."
   }
 }
 
@@ -30,27 +30,30 @@ variable "github_url" {
   }
 }
 
-variable "registration_token" {
-  description = "Short-lived GitHub Actions runner registration token. Stored in Terraform state and cloud-init data."
+variable "registration_tokens" {
+  description = "Comma-separated short-lived GitHub Actions runner registration tokens. One runner is created per token; values are stored in Terraform state and cloud-init data."
   type        = string
   sensitive   = true
 
   validation {
-    condition     = length(trimspace(var.registration_token)) > 0
-    error_message = "registration_token must not be empty."
+    condition = (
+      length(trimspace(var.registration_tokens)) > 0 &&
+      alltrue([for token in split(",", var.registration_tokens) : length(trimspace(token)) > 0])
+    )
+    error_message = "registration_tokens must contain one or more non-empty comma-separated tokens."
   }
 }
 
 variable "cpu" {
-  description = "Number of virtual CPU cores assigned to the runner."
+  description = "Number of virtual CPU cores assigned to each runner."
   type        = number
-  default     = 4
+  default     = 2
 }
 
 variable "memory" {
-  description = "Memory assigned to the runner as a Kubernetes quantity."
+  description = "Memory assigned to each runner as a Kubernetes quantity."
   type        = string
-  default     = "8Gi"
+  default     = "4Gi"
 }
 
 variable "root_disk_size" {

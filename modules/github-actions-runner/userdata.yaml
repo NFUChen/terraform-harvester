@@ -56,7 +56,12 @@ write_files:
       ./svc.sh start
 
 runcmd:
-  - [apt-get, install, -y, ca-certificates, curl, git, jq, qemu-guest-agent%{ if install_docker ~}, docker.io%{ endif ~}]
+  - [install, -d, -m, "0755", /etc/apt/keyrings]
+  - [bash, -c, "curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg"]
+  - [chmod, go+r, /etc/apt/keyrings/githubcli-archive-keyring.gpg]
+  - [bash, -c, "echo 'deb [arch=amd64 signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main' > /etc/apt/sources.list.d/github-cli.list"]
+  - [apt-get, update]
+  - [apt-get, install, -y%{ for package in packages ~}, ${package}%{ endfor ~}, gh]
   - [systemctl, enable, --now, qemu-guest-agent]
 %{ if install_docker ~}
   - [systemctl, enable, --now, docker]
