@@ -33,7 +33,6 @@ variable "github_url" {
 variable "registration_tokens" {
   description = "Comma-separated short-lived GitHub Actions runner registration tokens. One runner is created per token; values are stored in Terraform state and cloud-init data."
   type        = string
-  sensitive   = true
 
   validation {
     condition = (
@@ -117,8 +116,24 @@ variable "runner_sha256" {
   }
 }
 
-variable "install_docker" {
-  description = "Install Docker Engine from Ubuntu packages and allow the runner user to use it."
-  type        = bool
-  default     = true
+variable "aws_cli_version" {
+  description = "Pinned AWS CLI v2 release version."
+  type        = string
+  default     = "2.37.4"
+
+  validation {
+    condition     = can(regex("^2\\.[0-9]+\\.[0-9]+$", var.aws_cli_version))
+    error_message = "aws_cli_version must be an AWS CLI v2 semantic version such as 2.37.4."
+  }
+}
+
+variable "aws_cli_sha256" {
+  description = "SHA-256 checksum for the pinned AWS CLI v2 Linux x86_64 installer."
+  type        = string
+  default     = "0c59444563f4df735eeb5481f6165f95dae546c33761760d8be9855d5cfe2d12"
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{64}$", var.aws_cli_sha256))
+    error_message = "aws_cli_sha256 must be a lowercase 64-character SHA-256 digest."
+  }
 }

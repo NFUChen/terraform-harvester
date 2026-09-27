@@ -1,15 +1,8 @@
 locals {
   runner_labels = join(",", sort(tolist(var.labels)))
 
-  # Splitting the sensitive registration_tokens string keeps every derived
-  # value sensitive, including the resulting list itself. The *count* of
-  # tokens is not secret on its own, so that marking is stripped explicitly
-  # in order to build deterministic, index-based runner names that Terraform
-  # can use in for_each (which rejects sensitive keys/sets). The names never
-  # contain a token; only local.user_data below pairs a name back up with
-  # its (still sensitive) token by matching list position.
   registration_token_list  = [for token in split(",", var.registration_tokens) : trimspace(token)]
-  registration_token_count = length(nonsensitive(local.registration_token_list))
+  registration_token_count = length(local.registration_token_list)
 
   # One runner per registration token. A single token keeps the bare base
   # name so that existing single-runner deployments are not renamed.
@@ -18,31 +11,33 @@ locals {
     local.registration_token_count == 1 ? var.name : format("%s-%02d", var.name, index + 1)
   ]
 
-  baseline_packages = concat(
-    [
-      "build-essential",
-      "ca-certificates",
-      "curl",
-      "git",
-      "gnupg",
-      "jq",
-      "nodejs",
-      "npm",
-      "openjdk-17-jdk",
-      "openssh-client",
-      "python3",
-      "python3-pip",
-      "python3-venv",
-      "qemu-guest-agent",
-      "rsync",
-      "shellcheck",
-      "tar",
-      "unzip",
-      "wget",
-      "zip",
-    ],
-    var.install_docker ? ["docker.io"] : [],
-  )
+  baseline_packages = [
+    "build-essential",
+    "ca-certificates",
+    "curl",
+    # docker.io provides Docker Engine; docker-buildx adds the BuildKit-backed
+    # `docker buildx` CLI plugin that Dockerfile `RUN --mount=...` syntax
+    # requires. Plain docker.io alone leaves the CLI on the legacy builder.
+    "docker.io",
+    "docker-buildx",
+    "git",
+    "gnupg",
+    "jq",
+    "nodejs",
+    "npm",
+    "openjdk-17-jdk",
+    "openssh-client",
+    "python3",
+    "python3-pip",
+    "python3-venv",
+    "qemu-guest-agent",
+    "rsync",
+    "shellcheck",
+    "tar",
+    "unzip",
+    "wget",
+    "zip",
+  ]
 
   user_data = {
     for index, runner_name in local.runner_names :
@@ -54,8 +49,9 @@ locals {
       runner_labels       = local.runner_labels
       runner_version      = var.runner_version
       runner_sha256       = var.runner_sha256
+      aws_cli_version     = var.aws_cli_version
+      aws_cli_sha256      = var.aws_cli_sha256
       packages            = local.baseline_packages
-      install_docker      = var.install_docker
       ssh_authorized_keys = var.ssh_authorized_keys
     })
   }

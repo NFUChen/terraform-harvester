@@ -36,7 +36,7 @@ network = {
 The runner installs a practical Ubuntu CI baseline rather than attempting to reproduce the entire GitHub-hosted runner image and toolcache:
 
 - GitHub CLI (`gh`) from GitHub's signed apt repository
-- Docker Engine and access for the `actions` user by default
+- Docker Engine with Buildx/BuildKit support and access for the `actions` user by default
 - Git, curl, wget, jq, SSH, rsync, tar, zip, and unzip
 - GCC/build tools and ShellCheck
 - Python 3, pip, and venv
@@ -45,7 +45,7 @@ The runner installs a practical Ubuntu CI baseline rather than attempting to rep
 
 ## Token lifecycle
 
-`registration_tokens` contains short-lived tokens generated in GitHub under repository or organization **Settings → Actions → Runners → New self-hosted runner**. Supply one token per runner. The tokens are only needed during first boot, but remain sensitive because they are stored in Terraform state and Harvester cloud-init Secrets. Protect the state and namespace accordingly.
+`registration_tokens` contains short-lived tokens generated in GitHub under repository or organization **Settings → Actions → Runners → New self-hosted runner**. Supply one token per runner. The tokens are only needed during first boot and are stored in Terraform state and Harvester cloud-init data.
 
 Changing cloud-init inputs replaces the VMs. Supply fresh registration tokens before applying such a change. Each runner uses `--replace`, so recreating a VM under the same name replaces the old GitHub registration.
 

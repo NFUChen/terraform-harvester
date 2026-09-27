@@ -36,6 +36,11 @@ run "defaults_register_against_management_network" {
   }
 
   assert {
+    condition     = strcontains(local.user_data["github-actions-runner"], "awscli-exe-linux-x86_64-2.37.4.zip") && strcontains(local.user_data["github-actions-runner"], "0c59444563f4df735eeb5481f6165f95dae546c33761760d8be9855d5cfe2d12  awscliv2.zip") && strcontains(local.user_data["github-actions-runner"], "./aws/install")
+    error_message = "Cloud-init must download, verify, and install the pinned AWS CLI v2 release."
+  }
+
+  assert {
     condition     = strcontains(local.user_data["github-actions-runner"], "github-cli.list") && strcontains(local.user_data["github-actions-runner"], ", gh]")
     error_message = "The GitHub CLI must always be installed from its official apt repository."
   }
@@ -43,6 +48,11 @@ run "defaults_register_against_management_network" {
   assert {
     condition     = strcontains(local.user_data["github-actions-runner"], ", build-essential,") && strcontains(local.user_data["github-actions-runner"], ", nodejs,") && strcontains(local.user_data["github-actions-runner"], ", python3,")
     error_message = "The runner must install the baseline CI toolchain."
+  }
+
+  assert {
+    condition     = strcontains(local.user_data["github-actions-runner"], ", docker.io, docker-buildx,")
+    error_message = "The runner must always install Docker Engine and Buildx."
   }
 
   assert {
