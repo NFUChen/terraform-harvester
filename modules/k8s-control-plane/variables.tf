@@ -65,14 +65,12 @@ variable "network" {
 variable "load_balancer" {
   description = "Management-facing Harvester LoadBalancer. address is a caller-owned fixed IP; subnet includes its prefix length."
   type = object({
-    address                  = string
-    subnet                   = string
-    gateway                  = string
-    harvester_pod_cidr       = string
-    management_guest_gateway = optional(string, "10.0.2.1")
-    name                     = optional(string, "guest-k8s-control-plane")
-    listener_port            = optional(number, 6443)
-    pool_name                = optional(string, "guest-k8s-control-plane")
+    address       = string
+    subnet        = string
+    gateway       = string
+    name          = optional(string, "guest-k8s-control-plane")
+    listener_port = optional(number, 6443)
+    pool_name     = optional(string, "guest-k8s-control-plane")
   })
 
   validation {
@@ -85,8 +83,6 @@ variable "load_balancer" {
       can(cidrnetmask("${var.load_balancer.address}/32")),
       can(cidrnetmask(var.load_balancer.subnet)),
       can(cidrnetmask("${var.load_balancer.gateway}/32")),
-      can(cidrnetmask(var.load_balancer.harvester_pod_cidr)),
-      can(cidrnetmask("${var.load_balancer.management_guest_gateway}/32")),
     ])
     error_message = "load_balancer address, subnet, and gateway must be valid IPv4 values."
   }

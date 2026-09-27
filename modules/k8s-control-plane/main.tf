@@ -23,8 +23,6 @@ locals {
     var.load_balancer.address,
   ])
 
-  management_client_cidr = cidrsubnet(var.load_balancer.subnet, 0, 0)
-
   user_data = templatefile("${path.module}/userdata.yaml", {
     control_plane_ip            = local.control_plane_ip
     apiserver_cert_sans         = local.load_balancer_cert_sans
@@ -57,20 +55,6 @@ locals {
           use-routes = false
           use-dns    = false
         }
-        # LB health checks originate in the Harvester pod CIDR, while actual
-        # API clients arrive from the management LAN. Both enter through the
-        # masquerade NIC, so explicit routes prevent replies from escaping via
-        # the cluster VLAN default route.
-        routes = [
-          {
-            to  = var.load_balancer.harvester_pod_cidr
-            via = var.load_balancer.management_guest_gateway
-          },
-          {
-            to  = local.management_client_cidr
-            via = var.load_balancer.management_guest_gateway
-          },
-        ]
       }
       cluster = {
         match = {
