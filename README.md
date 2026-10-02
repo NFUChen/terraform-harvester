@@ -1,265 +1,172 @@
-# Harvester Infrastructure
+# Harvester Terraform Modules
 
-Terraform infrastructure for running an Ubuntu-based Kubernetes cluster and GitHub Actions runners on an existing Harvester cluster.
+Reusable Terraform modules for an existing Harvester cluster: VLAN networking, protected data volumes, virtual machines, kubeadm-based Kubernetes nodes, and persistent GitHub Actions runners.
 
-The architecture separates long-lived platform resources—images, VLAN networking, and protected data volumes—from replaceable virtual machines. Kubernetes is bootstrapped inside the VMs with cloud-init, containerd, and kubeadm.
+Use the modules independently or compose them in your own Terraform root configuration. The caller owns environment-specific choices such as provider credentials, state backends, image selection, network topology, and resource sizing. This repository is a module library, not a one-command deployment or a Harvester installer.
 
-> **Current status:** This is an environment-specific lab configuration, not a production-ready or one-command deployment. The foundation stack references a backup module whose source is currently missing. Review [Known limitations](#known-limitations) before running Terraform. Addresses and versions below describe the configuration, not verified live infrastructure.
-
-## Architecture
-
-```text
-Operator workstation / CI
-  |
-  | Terraform + Harvester management kubeconfig
-  v
-Existing Harvester cluster
-  |
-  +-- fundamental/                         Long-lived foundation state
-  |   +-- Ubuntu installation ISO and cloud image
-  |   +-- v100: VLAN 100, 172.16.100.0/24
-  |   |   +-- NAT gateway: 172.16.100.1
-  |   |   +-- DHCP server: 172.16.100.2
-  |   |   +-- DHCP pool: 172.16.100.100–200
-  |   +-- Protected app-data volume: 100 GiB
-  |   +-- PVC deletion/label admission policy
-  |
-  +-- vm/                                  Replaceable compute state
-      +-- Harvester LoadBalancer: 192.168.18.240
-      |   +-- TCP 6443 -> control-plane Kubernetes API
-      |   +-- TCP 22   -> control-plane SSH / kubeconfig export
-      +-- k8s-control-plane-01: 172.16.100.10
-      +-- stateful-worker-01:   172.16.100.20
-      |   +-- app-data -> /dev/vdb -> /mnt/app-data
-      +-- k8s-worker-02:        172.16.100.21
-      +-- k8s-worker-03:        172.16.100.22
-      +-- GitHub Actions runner VMs: DHCP on v100
-```
-
-There are **two Kubernetes API layers**:
-
-- **Harvester management cluster:** Terraform provisions VMs, networks, images, volumes, and host-side network services here.
-- **Guest Kubernetes cluster:** kubeadm creates this cluster inside the VMs. Applications run here, using the exported `vm/kubeconfig`.
-
-Do not interchange their kubeconfigs.
+## Module catalog
 
 ### Networking
 
-The foundation creates `harvester-public/v100` on the existing `mgmt` ClusterNetwork. DHCP and NAT are separate, single-replica Kubernetes Deployments on the **Harvester cluster**, selected onto the configured `local-harvester` node.
-
-Kubernetes VMs have two interfaces:
-
-- A **masquerade management interface** for Harvester pod-network reachability. DHCP routes and DNS from this interface are disabled.
-- A **bridged VLAN interface** with a static address. Cluster traffic and the default route use VLAN 100 through `172.16.100.1`.
-
-The Harvester LoadBalancer forwards through the control-plane management interface, while worker joins use the control-plane VLAN address. The guest API certificate includes both the VLAN address and the management-facing LoadBalancer address.
-
-### Guest Kubernetes bootstrap
-
-Cloud-init installs containerd, Kubernetes packages, and the QEMU guest agent. The control plane runs `kubeadm init`, then installs checksum-verified Flannel and metrics-server manifests. Workers join through the generated bootstrap command.
-
-Current settings:
-
-| Setting | Configured value |
+| Module | Purpose |
 | --- | --- |
-| Guest OS | Ubuntu 24.04 Noble cloud image |
-| Kubernetes package repository minor | `1.36` in `vm/main.tf` |
-| Control plane | 1 VM, 2 vCPUs, 4 GiB RAM, 40 GiB root disk |
-| Workers | 3 VMs, each with 4 vCPUs and 8 GiB RAM |
-| Pod CIDR | `10.244.0.0/16` |
-| Flannel | `v0.28.9` |
-| metrics-server | `v0.7.2`, enabled by default |
-| External guest API | `https://192.168.18.240:6443` |
+| [protected-network](modules/protected-network/README.md) | Create long-lived VLAN networks on an existing ClusterNetwork, with optional per-network DHCP and NAT services. Network identity is protected; topology changes use a new network and staged migration. |
+| [vlan-dhcp](modules/vlan-dhcp/README.md) | Run a dnsmasq DHCP service on an existing VLAN network. Configure the address pool, gateway, DNS servers, and node placement. |
+| [vlan-nat-gateway](modules/vlan-nat-gateway/README.md) | Provide outbound IPv4 NAT for a VLAN through a gateway Pod on the Harvester management cluster. |
 
-The version setting selects a Kubernetes minor-version package repository, not an exact patch version. Verify package availability and compatibility before deployment.
+### Storage and protection
 
-After the control plane becomes reachable, Terraform retrieves its admin kubeconfig over SSH, rewrites the API endpoint to the LoadBalancer address, and saves it as `vm/kubeconfig`.
+| Module | Purpose |
+| --- | --- |
+| [protected-volume](modules/protected-volume/README.md) | Create independently managed, empty data PVCs with protection labels, Terraform destruction guards, and frozen size updates. Volumes are owned separately from VMs. |
+| [volume-protection-policy](modules/volume-protection-policy/README.md) | Install cluster-scoped admission protection against deletion of labeled PVCs and removal of their protection label, with explicitly configured emergency identities. |
 
-### Persistent storage and protection
+### Compute and guest workloads
 
-The `app-data` volume is managed in the foundation state independently of worker VMs. It uses `harvester-longhorn`, `Block` mode, and `ReadWriteOnce` access. The stateful worker attaches the existing volume and mounts it as ext4 at `/mnt/app-data`.
+| Module | Purpose |
+| --- | --- |
+| [virtual-machine](modules/virtual-machine/README.md) | Create a single Harvester VM with configurable compute, placement, firmware, network interfaces, VM-owned disks, existing persistent PVC attachments, and cloud-init. |
+| [k8s-control-plane](modules/k8s-control-plane) | Bootstrap a single kubeadm control-plane VM with containerd, Flannel, optional metrics-server, a management-facing Harvester LoadBalancer, and optional local kubeconfig export. |
+| [k8s-worker-group](modules/k8s-worker-group) | Bootstrap a static map of kubeadm worker VMs, with optional existing data-volume attachments and guest filesystem mounts. |
+| [github-actions-runner](modules/github-actions-runner/README.md) | Create persistent Ubuntu x86_64 self-hosted runner VMs for a GitHub repository or organization, one per supplied registration token. |
 
-This is a **host filesystem mount inside a VM**, not an automatically provisioned guest Kubernetes PVC. Application manifests and guest-cluster storage integration are separate concerns.
+Each module's `variables.tf` and `outputs.tf` define its interface. For the Kubernetes modules, see the control-plane [inputs](modules/k8s-control-plane/variables.tf) and [outputs](modules/k8s-control-plane/outputs.tf), and worker-group [inputs](modules/k8s-worker-group/variables.tf) and [outputs](modules/k8s-worker-group/outputs.tf). The admission-policy module defines its outputs in [main.tf](modules/volume-protection-policy/main.tf).
 
-Protection has two layers:
+## How the modules fit together
 
-1. Terraform lifecycle rules prevent ordinary destruction of protected resources while their configuration remains present.
-2. A Harvester-cluster admission policy denies deletion of protected PVCs and removal of their protection label, except for explicitly allowed break-glass usernames.
-
-The current break-glass list includes `system:admin`. Using that identity for routine work bypasses the admission protection. Production use requires separate operational identities, restricted policy administration, and auditing.
-
-See the [protected-volume runbook](modules/protected-volume/README.md) and [volume-protection-policy documentation](modules/volume-protection-policy/README.md). Deletion protection is **not a backup**.
-
-## Repository layout
+Internal module composition:
 
 ```text
-.
-├── fundamental/                 Foundation Terraform root configuration
-├── vm/                          VM and guest-cluster Terraform root configuration
-├── modules/
-│   ├── protected-network/       Protected VLAN network + optional DHCP/NAT
-│   ├── vlan-dhcp/               VLAN DHCP service
-│   ├── vlan-nat-gateway/        VLAN egress gateway
-│   ├── protected-volume/        Long-lived Harvester data volumes
-│   ├── volume-protection-policy/  Cluster-level PVC admission protection
-│   ├── virtual-machine/         Shared VM, disk, NIC, and cloud-init abstraction
-│   ├── k8s-control-plane/       kubeadm control plane, LoadBalancer, export
-│   ├── k8s-worker-group/        Worker instances and persistent disk mounts
-│   └── github-actions-runner/   Persistent self-hosted runner VMs
-├── guest-addons/                No Terraform source currently present
-├── autoscaler/                  Kubernetes autoscaler source tree
-├── .github/workflows/           Terraform module test workflow
-└── provider.tf                 Incomplete top-level provider configuration
+protected-network
+├── vlan-dhcp                 optional, per network
+└── vlan-nat-gateway          optional, per network
+
+k8s-control-plane ──┐
+k8s-worker-group ───┼── virtual-machine
+github-actions-runner ─┘
+
+protected-volume             independent data-volume ownership
+volume-protection-policy     separately managed cluster protection
 ```
 
-`fundamental/` and `vm/` are independent Terraform roots. The VM stack discovers foundation resources by fixed names through Harvester data sources; it does not consume Terraform remote-state outputs. Apply order and matching resource names therefore matter.
+The higher-level compute modules reuse `virtual-machine`; they do not require you to create an additional VM module yourself. DHCP and NAT can also be used independently with an existing network.
 
-The repository-level `provider.tf` references undeclared variables and is not the deployment entry point. Run Terraform with `-chdir=fundamental`, `-chdir=vm`, or inside an individual module.
+Compose resources through their interfaces:
 
-**Checkout caveat:** The current `.gitignore` excludes `fundamental/` and `vm/`. Local files in those directories may not be present in a fresh clone unless already tracked. Verify that the intended root configurations are distributed before treating this repository as reproducible infrastructure.
+- **Network → VM:** `protected-network.ids[key]` supplies the namespace-qualified network reference (`namespace/name`).
+- **Volume → VM:** `protected-volume.names[key]` supplies `persistent_disks.<device>.existing_volume_name`. This is a PVC name, not a namespace-qualified ID; the VM and PVC must share a namespace.
+- **Control plane → workers:** pass `worker_join_command` and `cluster_generation` into the worker group's `join_command` and `cluster_generation`. The generation value tracks bootstrap configuration, not live cluster readiness.
+- **Policy → volumes:** deploy `volume-protection-policy` separately, preferably from independently controlled state before creating protected PVCs. The volume module does not install or verify the policy.
 
-## Prerequisites
+Keep long-lived networks and data volumes independent of replaceable compute. Whether these live in one state or separate states is a caller decision; separate states require an explicit resource-discovery or output-sharing strategy.
 
-- An existing, reachable Harvester cluster; this repository does not install Harvester itself.
-- Terraform **1.12.2 recommended**, matching CI and supporting the module validation/test features in use.
-- Harvester provider **1.9.0**; the foundation also uses Kubernetes provider `~> 2.38`.
-- A Harvester kubeconfig with the required resource permissions. The stacks default to `~/.kube/harvester.yaml`.
-- An existing, ready `mgmt` ClusterNetwork and the necessary VLAN/uplink configuration on eligible nodes.
-- Available, non-conflicting VLAN addresses and a reserved management LoadBalancer address reachable from the Terraform workstation.
-- A cluster API supporting `admissionregistration.k8s.io/v1` `ValidatingAdmissionPolicy` and `ValidatingAdmissionPolicyBinding`.
-- Longhorn storage and the `harvester-longhorn` StorageClass.
-- Outbound access for image downloads, Ubuntu/Kubernetes packages, GitHub release manifests, and GitHub Actions registration.
-- Bash, OpenSSH, Python 3, and `kubectl` on the operator workstation. The kubeconfig export runs locally during apply.
-- Fresh GitHub Actions registration tokens if deploying the runner module.
+## Requirements
 
-## Deployment workflow
+- An existing, reachable Harvester cluster and credentials with permissions for the resources managed by the selected modules.
+- **Terraform 1.12.2 recommended**, matching CI. Although module declarations currently say `>= 1.3`, some implementation features require newer releases; do not treat 1.3 as a universal supported minimum.
+- Existing namespaces, ready VM images, StorageClasses, and ClusterNetworks/uplinks as required by the selected modules.
+- For VLAN services, an eligible node carrying the VLAN and permissions for the required network capabilities; NAT also uses a privileged init container.
+- For admission protection, an API supporting `admissionregistration.k8s.io/v1` `ValidatingAdmissionPolicy` and `ValidatingAdmissionPolicyBinding`, plus cluster-scoped administration permissions.
+- For guest bootstrap, outbound access to the relevant package repositories and release artifacts. Control-plane kubeconfig export additionally requires local Bash, OpenSSH, Python 3, and `kubectl`.
 
-### 1. Review environment-specific configuration
+Configure providers in your calling root module:
 
-Before initialization, resolve the missing backup module described below and inspect:
+| Provider | Constraint | Used by |
+| --- | --- | --- |
+| `harvester/harvester` | `= 1.9.0` | Protected networks and volumes, VM and higher-level compute modules |
+| `hashicorp/kubernetes` | `~> 2.38` | Protected networks, DHCP, NAT, and admission policy |
+| `hashicorp/random` | `~> 3.6` | Kubernetes control-plane and worker-group modules |
 
-| File | Values to review |
-| --- | --- |
-| `fundamental/net.tf` | ClusterNetwork, VLAN, CIDR, DHCP pool, DNS, node selector |
-| `fundamental/images.tf` | Image URLs, availability, and names |
-| `fundamental/volumes.tf` | Data volume, StorageClass, break-glass users, backup module reference |
-| `vm/main.tf` | Static addresses, LoadBalancer range, Kubernetes version, resources, runner tokens |
-| `vm/variables.tf` | Harvester access and GitHub organization/repository URL |
+Only configure the providers needed by your chosen modules. Both the Harvester provider and the Kubernetes provider used by these modules target the **Harvester management cluster**, not the guest Kubernetes cluster created inside VMs.
 
-The VM stack currently embeds runner registration tokens directly in `vm/main.tf`. Do not reuse or publish them. Replace this with sensitive variable or secret-management input and supply fresh, short-lived tokens. Changes to runner bootstrap inputs may replace runner VMs.
+## Using a module
 
-Use an absolute kubeconfig path to avoid differences in tilde expansion:
+Create your own Terraform root configuration and reference the desired module directory. The following module block assumes a caller located alongside a checkout named `harvester`; adjust `source` to your checkout location. Configure the Harvester provider in that caller before planning.
+
+```hcl
+module "data" {
+  source = "../harvester/modules/protected-volume"
+
+  namespace          = "default"
+  storage_class_name = "harvester-longhorn"
+
+  volumes = {
+    "application-data" = {
+      size = "100Gi"
+    }
+  }
+}
+```
+
+The namespace and StorageClass must already exist; use your environment's actual names. This creates an empty PVC with the module defaults of `Block` mode and `ReadWriteOnce` access. It does not attach, format, or back up the volume, or install API-level deletion protection.
+
+To attach it to a separately configured `virtual-machine` module in the same namespace, include this argument in that VM's module block:
+
+```hcl
+persistent_disks = {
+  data = {
+    existing_volume_name = module.data.names["application-data"]
+  }
+}
+```
+
+Guest partitioning, formatting, and mounting are separate from attaching a disk. See the [VM documentation](modules/virtual-machine/README.md) for a complete VM configuration and the [volume runbook](modules/protected-volume/README.md) for expansion, migration, and decommissioning.
+
+From your own root configuration, initialize and review the plan before applying:
 
 ```sh
-export TF_VAR_kubeconfig="$HOME/.kube/harvester.yaml"
-# Optional:
-# export TF_VAR_kubecontext="your-harvester-context"
+terraform init
+terraform validate
+terraform plan -out=deployment.tfplan
+terraform apply deployment.tfplan
 ```
 
-These variables select the **Harvester management cluster**, not the guest cluster.
+These commands are for your calling configuration, not a repository-wide deployment entry point. Protect the state and saved plan as sensitive artifacts.
 
-### 2. Apply the foundation
+## Lifecycle and operational boundaries
 
-**These commands require the missing backup-module reference to be resolved first.** A module with `count = 0` still needs valid source code during initialization.
+### Protection is not backup
 
-```sh
-terraform -chdir=fundamental init
-terraform -chdir=fundamental validate
-terraform -chdir=fundamental plan -out=foundation.tfplan
-terraform -chdir=fundamental apply foundation.tfplan
-```
+Terraform destruction guards only work while the relevant configuration remains present; they do not prevent direct API deletion. Admission protection adds a separate enforcement layer, but its policy, binding, and emergency identities must themselves be secured. Neither layer provides backups.
 
-Confirm image readiness, DHCP/NAT service health, and volume availability before creating VMs.
+Protected networks deliberately ignore subsequent configuration changes. Protected volumes ignore size changes, including requested growth. Use their documented migration and expansion procedures, and distinguish declared configuration from observed resource outputs.
 
-### 3. Apply compute
+### VM ownership matters
 
-```sh
-terraform -chdir=vm init
-terraform -chdir=vm validate
-terraform -chdir=vm plan -out=compute.tfplan
-terraform -chdir=vm apply compute.tfplan
-```
+VM-owned root and ephemeral disks are disposable. Existing persistent PVCs are attached without transferring ownership to the VM. Storage attachment and cloud-init changes can trigger VM replacement; inspect plans before applying and verify data retention independently.
 
-Terraform generates an RSA SSH key at `vm/rsa_4096_master.pem` and exports the guest admin kubeconfig to `vm/kubeconfig`. Protect both files and ensure the private key has owner-only permissions:
+Volume creation is not proof that a PVC is ready for attachment. An access mode such as `ReadWriteMany` also does not make an ordinary guest filesystem safe for concurrent writers. Review worker mount configuration carefully: bootstrap can format a selected device when no filesystem is detected.
 
-```sh
-chmod 600 vm/rsa_4096_master.pem
-```
+### Workload modules are not managed platforms
 
-### 4. Verify the guest cluster
+- DHCP and NAT are single-replica lab/sandbox services with `Recreate` updates and ephemeral lease or connection state, not highly available network appliances.
+- NAT supplies neither DNS nor a default-deny security firewall. Configure explicit DNS resolvers when pairing it with standalone DHCP, whose default assumes the gateway serves DNS.
+- The Kubernetes control plane is a single VM. Worker groups are static, and bootstrap changes can rebuild VMs rather than perform rolling cluster upgrades.
+- Review bootstrap security settings before production use, including join-command CA verification, shared worker console credentials, and metrics-server's insecure kubelet TLS default.
+- GitHub Actions runners are persistent machines intended for trusted workflows. Isolate their credentials and network access, and account for registration-token expiry and VM replacement behavior.
 
-```sh
-terraform -chdir=vm output k8s_management_api_endpoint
-terraform -chdir=vm output k8s_worker_ips
+### Credentials and readiness
 
-kubectl --kubeconfig=vm/kubeconfig get nodes -o wide
-kubectl --kubeconfig=vm/kubeconfig get pods -A
-kubectl --kubeconfig=vm/kubeconfig top nodes
-```
+Terraform state, saved plans, and cloud-init data can contain credentials. Sensitive output redaction is not encryption, and not every credential-bearing input is marked sensitive. Secure state storage, restrict access to generated kubeconfigs, and keep secrets out of source control and logs.
 
-Metrics may take time to become available. For bootstrap failures, inspect `/var/log/cloud-init-output.log` inside the affected VM and check `cloud-init status --long`.
-
-Terraform also exposes sensitive outputs for the worker join command and shared worker console password. Retrieve them only when needed; do not put them in CI logs.
-
-## GitHub Actions runners
-
-The runner module creates one persistent Ubuntu VM per comma-separated registration token. The current root configuration supplies two tokens and attaches runners to VLAN 100 with DHCP.
-
-Bootstrap installs Docker/Buildx, GitHub CLI, Git, build tools, Python, Node.js/npm, and OpenJDK 17. This is a practical CI baseline, not a replica of the GitHub-hosted runner image.
-
-Runners need outbound access to GitHub but do not require inbound Internet ports. Only run trusted workflows on these persistent machines: jobs may access credentials, Docker, and resources reachable from the lab network.
-
-See [runner configuration and token lifecycle](modules/github-actions-runner/README.md).
-
-## Module documentation
-
-- [Protected networks and migration](modules/protected-network/README.md)
-- [VLAN DHCP](modules/vlan-dhcp/README.md)
-- [VLAN NAT gateway](modules/vlan-nat-gateway/README.md)
-- [Protected volumes and decommissioning](modules/protected-volume/README.md)
-- [PVC admission protection](modules/volume-protection-policy/README.md)
-- [Virtual machine abstraction](modules/virtual-machine/README.md)
-- [GitHub Actions runners](modules/github-actions-runner/README.md)
-
-The control-plane and worker module interfaces are documented in their respective `variables.tf` and `outputs.tf` files.
+Successful Terraform operations and mocked tests do not prove guest readiness. Validate networking, cloud-init completion, cluster joins, storage retention, and admission enforcement against your target environment.
 
 ## Testing and CI
 
-The [Terraform Test workflow](.github/workflows/terraform-test.yml) runs on pull requests affecting modules or the workflow itself. It discovers module directories containing `tests/`, initializes each independently, and runs `terraform test` in a matrix with Terraform 1.12.2. Failures are collected into a GitHub Actions job summary.
+The [Terraform Test workflow](.github/workflows/terraform-test.yml) discovers module directories containing `tests/` and runs them independently in a matrix using Terraform 1.12.2. It triggers on pull requests changing modules or the workflow itself.
 
-Run a module locally:
+Run a module's checks locally:
 
 ```sh
-terraform -chdir=modules/k8s-control-plane init -backend=false
-terraform -chdir=modules/k8s-control-plane validate
-terraform -chdir=modules/k8s-control-plane test
+terraform -chdir=modules/virtual-machine init -backend=false
+terraform -chdir=modules/virtual-machine validate
+terraform -chdir=modules/virtual-machine test
 ```
 
-Check formatting of the infrastructure code:
+Check formatting across the module library:
 
 ```sh
 terraform fmt -check -recursive modules
-terraform fmt -check -recursive fundamental
-terraform fmt -check -recursive vm
 ```
 
-Module tests are not proof of a successful end-to-end deployment. Live verification is still required for VLAN connectivity, image/package availability, LoadBalancer reachability, cloud-init, and admission enforcement. Review module-specific verification scripts before running them against a cluster.
-
-## State, credentials, and lifecycle safety
-
-- No remote backend is configured in the current roots. Protect and back up each stack's local state; use an appropriately secured, locking remote backend before collaborative operation.
-- State and saved plans can contain SSH private keys, bootstrap tokens, runner registration tokens, and generated passwords. Terraform's `sensitive` flag redacts normal output; it does not encrypt state.
-- Generated kubeconfigs grant administrative access. Keep them out of source control and logs.
-- Preserve foundation resources when replacing compute. Review all replacement and disk-attachment changes before applying.
-- Network identity is intentionally protected. VLAN/ClusterNetwork changes should use a new network and a staged migration, not in-place mutation.
-- Do not use a blanket `terraform destroy` as a cleanup procedure. Follow the module decommission runbooks for protected resources.
-
-## Known limitations
-
-1. **Incomplete backup implementation.** `fundamental/volumes.tf` references `modules/longhorn-backup-target`, but that directory currently contains no Terraform source. Restore/implement the module, or remove the unused module block and dependent output under review, before initializing the foundation. Setting `longhorn_backup = null` does not solve source loading. `modules/cluster-manifest-backup` also has no Terraform source, and `fundamental/backup.tf` is empty. No working backup deployment should be assumed.
-2. **No high availability.** There is one guest control-plane VM. DHCP and NAT are single-Pod lab services with ephemeral lease/connection state and `Recreate` updates.
-3. **No automatic node scaling wired in.** The worker group is a static instance map. The `autoscaler/` source tree is not deployed by the current Terraform roots.
-4. **Guest add-ons are not a separate implemented stack.** `guest-addons/` has no Terraform source. Flannel and metrics-server are currently installed by control-plane cloud-init.
-5. **Bootstrap changes may recreate VMs.** Treat cloud-init changes—including add-on settings—as potentially destructive and inspect the plan. This is not an in-place Kubernetes upgrade workflow.
-6. **Lab security defaults need review.** The kubeadm bootstrap token is non-expiring, workers share a generated console password, and metrics-server enables `--kubelet-insecure-tls` by default.
-7. **Environment-specific inputs are embedded in code.** Network addresses, the node selector, image URLs, Kubernetes minor version, and runner registration configuration require validation for each target environment.
+The tests use mocked providers and exercise configuration behavior, not a live Harvester deployment. Review module-specific verification scripts before running them against a cluster.
