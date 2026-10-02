@@ -1,353 +1,202 @@
 # protected-network
 
-Wrapper around `harvester_network` for Harvester provider `1.9.0`. It creates
-namespaced Multus NetworkAttachmentDefinitions (NADs) and prevents ordinary
-Terraform operations from silently changing VLAN identity or deleting a
-network.
+## Purpose and scope
 
-Two limits to understand before relying on it:
+Creates namespaced Harvester NetworkAttachmentDefinitions (NADs) with a
+create-once lifecycle. Optionally composes the sibling `vlan-dhcp` and
+`vlan-nat-gateway` utility modules per network. It does not create namespaces,
+ClusterNetworks, VLANConfigs, physical uplinks, or switch configuration.
 
-- The module never discovers consumers. It does not know which VMs use a NAD;
-  consumer checks are manual and documented below.
-- Terraform lifecycle rules live in configuration. Deleting the module block
-  removes them, so CI/RBAC must also gate network deletion.
+## Requirements and providers
 
-## Safety guarantees
+| Dependency | Declared constraint / requirement |
+| --- | --- |
+| Terraform | `>= 1.3` in `versions.tf`; this is not a compatibility guarantee for the complete module tree. The DHCP child uses cross-variable validation requiring Terraform 1.9+. Use Terraform 1.9+ for composition and tests. |
+| `harvester/harvester` | `= 1.9.0` |
+| `hashicorp/kubernetes` | `~> 2.38` (>= 2.38.0, < 3.0.0), also required by the child modules |
 
-While the module remains configured:
+Configure providers in the caller. The target namespace and ClusterNetwork
+must exist. Ensure ClusterNetwork readiness, VLANConfig coverage, uplinks,
+trunks, and MTU on every eligible node. The data-source lookup checks existence,
+not end-to-end readiness. Provider 1.9.0 has a separate one-minute
+ClusterNetwork readiness wait that module timeouts do not extend.
 
-- every network has `prevent_destroy = true`;
-- `vlan_id` changes are ignored;
-- `cluster_network_name` changes are ignored;
-- route combinations are validated before the provider runs;
-- neither global nor per-network labels may set the controller-owned
-  `network.harvesterhci.io/clusternetwork` key;
-- the ClusterNetwork is looked up at plan time, so a missing ClusterNetwork
-  fails before apply. This proves existence, not Ready state; the provider
-  performs its own separate readiness wait during create/update.
+Optional services additionally require Multus, a compatible VLAN NAD, working
+Pod-network egress for NAT, and admission policies permitting their security
+contexts. See the sibling module READMEs for workload requirements.
 
-The first two controls are verified by a committed, reproducible script that
-builds throwaway state and only runs `terraform plan`:
+## Default context
 
-```sh
-scripts/verify_lifecycle_guarantees.sh <cluster_network_name> <kubeconfig>
-```
+The default namespace is `harvester-public`; the ClusterNetwork and each VLAN ID
+are required choices. With `services` omitted, this creates only NADs using
+`route.mode = "auto"`, not DHCP or a gateway. This suits an existing VLAN whose
+addressing/routing is provided elsewhere and whose route metadata can be derived
+by Harvester. Choose manual CIDR/gateway metadata before creation when needed;
+existing NAD configuration is frozen, so later topology changes require migration.
 
-It performs one live, read-only ClusterNetwork lookup (no apply/delete), then
-asserts that `terraform plan -destroy` fails with
-`Instance cannot be destroyed`. Its update plan includes a mutable description
-as a positive control while configuration VLAN 200 differs from state VLAN 100
-and the configured ClusterNetwork differs from state `legacy-network`; plan
-JSON must retain both frozen state values.
+Supplying `services` enables both DHCP and NAT unless explicitly disabled. Defaults
+reserve host offsets 1/2 for gateway/DHCP, lease offsets 100–200 for `12h`, and
+advertise `1.1.1.1` and `8.8.8.8` as DNS. These fit a lab `/24` with those addresses
+available and public DNS reachable; smaller subnets need pool overrides, and private
+DNS needs explicit resolvers. Both services are single-instance, non-HA workloads;
+use other infrastructure when persistent leases or uninterrupted egress are needed.
 
-Terraform lifecycle exists in configuration, not state. Removing the entire
-module block also removes its lifecycle controls. Production CI/RBAC must
-therefore block NAD deletion and network module removal without explicit
-approval.
+## Usage
 
-## Quick start — automatic route mode
+Caller configuration snippet, **not a standalone root module**: declare and
+supply the referenced variables and configure providers separately. The source
+path below assumes the caller is at the **repository root**; adjust it for a
+caller located elsewhere.
 
 ```hcl
-module "workload_networks" {
+module "networks" {
   source = "./modules/protected-network"
 
-  namespace            = "harvester-public"
-  cluster_network_name = "workload"
+  cluster_network_name = var.cluster_network_name
 
   networks = {
-    "production-v100" = {
-      vlan_id = 100
-    }
-
-    "database-v110" = {
-      vlan_id = 110
-      route = {
-        mode           = "auto"
-        dhcp_server_ip = "172.16.110.10"
-      }
-    }
+    "lab-vlan" = { vlan_id = 120 }
   }
 }
 ```
 
-## Built-in DHCP and NAT services
+`lab-vlan` and VLAN `120` are illustrative choices, not defaults; select a VLAN
+carried by your ClusterNetwork's uplinks. This NAD-only example keeps the default
+namespace and auto-route metadata. Consumers use `module.networks.ids["lab-vlan"]`
+as the namespace-qualified network ID.
 
-Add a `services` object to create one DHCP Pod and one NAT gateway Pod for the
-VLAN without wiring separate modules in the root configuration:
+For a lab VLAN needing both services, replace the `lab-vlan` value above with:
 
 ```hcl
-networks = {
-  "v100" = {
-    vlan_id = 100
-
-    services = {
-      cidr              = "172.16.100.0/24"
-      enable_dhcp       = true
-      enable_nat        = true
-      pool_start_offset = 100
-      pool_end_offset   = 200
-      dns_servers       = ["1.1.1.1", "8.8.8.8"]
-
-      node_selector = {
-        "kubernetes.io/hostname" = "local-harvester"
-      }
-    }
+"lab-vlan" = {
+  vlan_id = 120
+  services = {
+    cidr          = "192.168.120.0/24"
+    node_selector = var.vlan_node_selector
   }
 }
 ```
 
-The composition reserves predictable addresses:
+The CIDR is an example choice: verify it does not overlap your networks and reserve
+`.1`/`.2`. This uses the service defaults above, including pool `.100`–`.200`;
+provide a selector for actual VLAN-capable nodes. Services do not set NAD route
+metadata. Do not deploy another DHCP server or gateway on the same addresses.
 
-```text
-gateway / NAT: cidrhost(cidr, 1)  -> 172.16.100.1
-DHCP server:   cidrhost(cidr, 2)  -> 172.16.100.2
-lease pool:    caller-supplied host offsets
-```
+## Inputs
 
-The actual DHCP service is the child `vlan-dhcp` Deployment. The composition
-does not write `route_dhcp_server_ip` implicitly: protected NADs are
-create-once (`ignore_changes = all`), and controller route metadata is not
-required for DHCP to function. If a newly created network needs Harvester
-route metadata, declare it explicitly under `route` before the first apply;
-existing networks require blue/green migration rather than metadata updates.
+| Name | Type | Required / default | Meaning |
+| --- | --- | --- | --- |
+| `namespace` | `string` | `"harvester-public"` | Existing namespace; DNS-1123 label. |
+| `cluster_network_name` | `string` | Required | Existing ClusterNetwork; DNS-1123 label, shared by all networks. |
+| `networks` | `map(object)` | Required, non-empty | Exact NAD names mapped to the attributes below. |
+| `labels` | `map(string)` | `{}` | Common labels; override per-network labels but not module-managed labels. |
+| `tags` | `map(string)` | `{}` | Common tags; per-network tags take precedence. |
+| `timeouts` | `object` | `{}` | Optional `create = "5m"`, `read = "2m"`, `update = "5m"`, `delete = "10m"`. |
 
-The child implementations remain independent Pods and failure domains:
+Each `networks` value supports:
 
-```text
-protected-network
-├── NAD
-├── vlan-dhcp (optional)
-└── vlan-nat-gateway (optional)
-```
+| Attribute | Type | Required / default | Meaning |
+| --- | --- | --- | --- |
+| `vlan_id` | `number` | Required | Integer from 0 through 4094. |
+| `description` | `string` | `null` | Initial NAD description. |
+| `labels` | `map(string)` | `{}` | Initial per-network labels. |
+| `tags` | `map(string)` | `{}` | Initial per-network tags. |
+| `route` | `object` | `{}` | Optional route metadata, detailed below. |
+| `route.mode` | `string` | `"auto"` | `auto` rejects CIDR/gateway; `manual` requires both. |
+| `route.cidr` | `string` | `null` | IPv4 CIDR for manual routing. |
+| `route.gateway` | `string` | `null` | IPv4 gateway within the manual CIDR. Membership validation does not prove it is a usable host. |
+| `route.dhcp_server_ip` | `string` | `null` | IPv4 address for auto-route metadata only; does not create DHCP. |
+| `services` | `object` | `null` | Optional workloads; at least one service must be enabled when supplied. |
+| `services.cidr` | `string` | Required with `services` | IPv4 service subnet; caller must keep it consistent with route metadata. |
+| `services.node_selector` | `map(string)` | Required with `services`, non-empty | Select only nodes whose uplinks carry the VLAN. |
+| `services.enable_dhcp` | `bool` | `true` | Create a DHCP child workload. |
+| `services.enable_nat` | `bool` | `true` | Create a NAT child workload. |
+| `services.pool_start_offset` | `number` | `100` | First DHCP host offset; must fit the subnet and follow reserved offsets. |
+| `services.pool_end_offset` | `number` | `200` | Last DHCP host offset; must fit the subnet, exclude broadcast, and be >= start. |
+| `services.dns_servers` | `list(string)` | `["1.1.1.1", "8.8.8.8"]` | DNS advertised by DHCP; unlike standalone DHCP, defaults to explicit resolvers. |
+| `services.lease_time` | `string` | `"12h"` | DHCP lease duration. |
+| `services.dhcp_image` | `string` | `null` | Override DHCP image; null uses the pinned dnsmasq digest documented in `../vlan-dhcp/README.md`. |
+| `services.nat_image` | `string` | `null` | Override NAT image; null uses the pinned netshoot digest documented in `../vlan-nat-gateway/README.md`. |
 
-Both service modules are lab/sandbox single-Pod designs. DHCP leases and NAT
-conntrack state are ephemeral, and updates use `Recreate`; do not use this
-composition as production HA networking.
-
-## Manual route mode
-
-```hcl
-networks = {
-  "production-v200" = {
-    vlan_id = 200
-    route = {
-      mode    = "manual"
-      cidr    = "172.16.200.0/24"
-      gateway = "172.16.200.1"
-    }
-  }
-}
-```
-
-Validation rules:
-
-- `auto` rejects CIDR/gateway;
-- `manual` requires CIDR and gateway;
-- manual gateway must share the CIDR prefix. This checks membership only; it
-  does not reject subnet/broadcast endpoints because `/31` and `/32` have
-  different valid-host semantics. Platform review must confirm the gateway is
-  usable for the chosen subnet;
-- DHCP server IP is allowed only with `auto`;
-- VLAN ID must be an integer from 0 through 4094;
-- all addresses are validated as IPv4 because Harvester's provider examples
-  and route fields are IPv4-oriented.
-
-## Attach to virtual-machine
-
-```hcl
-module "web" {
-  source = "./modules/virtual-machine"
-
-  name_prefix = "web"
-  root_image  = data.harvester_image.ubuntu_noble.id
-
-  network_interfaces = [{
-    name           = "nic-1"
-    type           = "bridge"
-    model          = "virtio"
-    network_name   = module.workload_networks.ids["production-v100"]
-    wait_for_lease = true
-  }]
-}
-```
-
-The output ID is `namespace/name`, which is exactly what the VM provider
-expects in `network_interface.network_name`.
-
-For non-management networks, `wait_for_lease = true` generally requires
-qemu-guest-agent in the guest. Without it the VM may be running while
-Terraform waits until timeout for an IP.
-
-## Why VLAN ID is frozen
-
-A network is a Multus NAD. The VM references its name, not its VLAN ID. Multus
-reads NAD config when creating the virt-launcher Pod.
-
-If VLAN ID is changed in place:
-
-- already-running Pods can remain attached to the old VLAN;
-- restarted, migrated, or recreated Pods read the new VLAN;
-- VMs using the same NAD name can split across different VLANs;
-- the fault may appear days later during node drain or VM restart;
-- route CIDR/gateway metadata can become inconsistent with the new VLAN.
-
-The module therefore ignores VLAN/ClusterNetwork config changes. Terraform
-remains documentation for the originally declared topology, but cannot mutate
-it through ordinary apply.
-
-## VLAN or ClusterNetwork migration
-
-Topology changes use a new NAD name, not an in-place update or same-name
-replacement.
-
-1. Add a new network, for example `production-v200`, while retaining
-   `production-v100`.
-2. Verify ClusterNetwork Ready and VLANConfig coverage on every target node.
-3. Verify physical switch trunk, MTU, DHCP, gateway, and routes.
-4. Attach a disposable canary VM to the new NAD and test traffic.
-5. Migrate workload VMs in small batches by changing `network_name` and
-   restarting/recreating the VMI.
-6. Verify each batch before continuing.
-7. Confirm no VM, VMI, or Pod references the old NAD.
-8. Remove the old NAD from Terraform state without deleting it.
-9. Remove the old key from config.
-10. Delete the old NAD through an approved operational process.
-
-Do not use `terraform apply -replace` on a production network. Replacing a NAD
-does not delete VM objects, but creates a window where restarted Pods cannot
-find the NAD and can leave running/restarted VMs on different topology.
-
-## Decommissioning a network
-
-### Consumer check
-
-```sh
-kubectl get vm -A -o yaml
-kubectl get vmi -A -o yaml
-kubectl get pod -A -o yaml
-kubectl get network-attachment-definitions -A
-```
-
-Search desired VM/VMI networks and Pod Multus annotations for the exact
-`namespace/name` NAD reference. Check both desired specs and running Pods.
-
-### Relinquish Terraform ownership without deletion
-
-A `removed` block cannot address one `for_each` resource instance. Use an
-approved state operation:
-
-```sh
-terraform state rm \
-  'module.workload_networks.harvester_network.this["production-v100"]'
-```
-
-Then remove the matching map key from configuration. Verify the NAD still
-exists before any further apply:
-
-```sh
-kubectl -n harvester-public get network-attachment-definition production-v100
-```
-
-### Delete outside Terraform
-
-Only after consumer checks and migration approval, delete the old NAD via the
-platform operational runbook. Deleting the NAD does not delete VM resources,
-but a VM Pod recreated afterward cannot attach that network.
-
-## ClusterNetwork and VLANConfig prerequisites
-
-This module does not create or modify:
-
-- `harvester_clusternetwork`;
-- `harvester_vlanconfig`;
-- node uplink NIC/bond settings;
-- physical switch trunk configuration.
-
-Those belong in a more restricted foundation module/state. The network
-provider waits at most one minute for ClusterNetwork Ready, regardless of this
-module's create/update timeout. A Ready ClusterNetwork does not prove every
-node uplink or physical VLAN path works.
-
-Before creating workload networks, verify VLANConfig matched nodes and uplink
-health on every node that may host the VM.
-
-## Route metadata is immutable
-
-The module uses `ignore_changes = all` to prevent provider 1.9.0 from feeding
-controller-computed labels/CIDR/gateway back into an invalid `route_mode=auto`
-update. Consequently VLAN, ClusterNetwork, route metadata, labels, description,
-tags, and timeouts are create-once for each NAD name.
-
-Changing any declared NAD field produces a no-op plan; compare `declared_*` and
-`observed_*` outputs to detect that configuration migration is required. Create
-a new network name and migrate VMs instead of editing the existing NAD. DHCP
-and NAT child workloads remain independently updatable because they are
-separate Kubernetes resources outside the ignored NAD lifecycle.
-
-## Labels
-
-The module reserves and controls:
-
-```text
-app.kubernetes.io/managed-by
-app.kubernetes.io/instance
-platform.harvester.io/protected
-```
-
-Callers cannot set the controller-owned:
-
-```text
-network.harvesterhci.io/clusternetwork
-```
-
-Harvester/controller-managed labels can still appear in state because provider
-1.9.0 marks labels Optional+Computed.
-
-## Import
-
-Declare the exact name/VLAN/ClusterNetwork/routes first, then import:
-
-```sh
-terraform import \
-  'module.workload_networks.harvester_network.this["production-v100"]' \
-  harvester-public/production-v100
-```
-
-Inspect the first plan carefully. Do not accept any unexpected topology change.
-Because VLAN and ClusterNetwork are ignored after import, the live NAD remains
-unchanged while labels/routes can reconcile.
+NAD keys must be DNS-1123 subdomains up to 253 characters. With services, they
+must instead be single DNS-1123 labels up to 58 characters. Global and
+per-network labels cannot set `network.harvesterhci.io/clusternetwork`.
+The module owns `app.kubernetes.io/managed-by`, `app.kubernetes.io/instance`,
+and `platform.harvester.io/protected`.
 
 ## Outputs
 
+Maps below are keyed by NAD name unless stated otherwise.
+
 | Output | Meaning |
 | --- | --- |
-| `ids` | NAD IDs (`namespace/name`) for VM `network_name` |
-| `names` | NAD names |
-| `declared_vlan_ids` | Current config values; can differ from live values because topology is frozen |
-| `observed_vlan_ids` | VLAN IDs last observed from live NAD/provider state |
-| `declared_cluster_network_name` | Current module input; ordinary apply does not mutate live topology |
-| `observed_cluster_network_names` | ClusterNetwork label last observed on each live NAD |
-| `declared_routes` | Current route config |
-| `observed_routes` | Route values last observed from the live NAD |
-| `route_connectivity` | Controller/provider observation, not end-to-end proof |
+| `ids` | NAD IDs in `namespace/name` form. |
+| `names` | NAD names. |
+| `declared_vlan_ids` | VLAN IDs from current caller configuration. |
+| `observed_vlan_ids` | VLAN IDs last observed in provider state. |
+| `declared_cluster_network_name` | Scalar ClusterNetwork name from current input. |
+| `observed_cluster_network_names` | ClusterNetwork names last observed in provider state. |
+| `declared_routes` | Configured objects with `mode`, `cidr`, `gateway`, `dhcp_server_ip`. |
+| `observed_routes` | Corresponding route objects from provider state. |
+| `route_connectivity` | Provider/controller observation, not proof of guest or application connectivity. |
+| `dhcp_server_ips` | Server addresses for DHCP-enabled networks only. |
+| `gateway_ips` | Gateway addresses for NAT-enabled networks only. |
 
-## CI/RBAC recommendations
+## Behavior and limitations / lifecycle
 
-Production pipelines should block:
+- NAD resources use **`prevent_destroy = true` and `ignore_changes = all`**.
+  Ordinary applies do not reconcile existing NAD fields, including VLAN,
+  ClusterNetwork, routes, labels, tags, and description. This avoids provider
+  1.9.0 feeding controller-derived auto-route values into invalid updates.
+  Imported NADs are also subject to this all-fields ignore behavior.
+- Protection is not absolute: lifecycle rules live in configuration, not state.
+  Removing the module/resource configuration removes the protection; direct
+  API operations are also outside Terraform's guard. Use CI/RBAC and approval
+  controls for deletion, replacement, and configuration removal.
+- Declared and observed outputs can differ. They expose selected drift, not a
+  full drift audit, and ordinary apply will not repair it. Use a new NAD name
+  for intended changes rather than same-name replacement. A running Pod can
+  retain its old attachment while a restarted Pod reads changed NAD topology.
+- The module does not discover consumers. Before decommissioning, inspect VM,
+  VMI, and Pod references, migrate consumers to the new NAD, verify attachment
+  and traffic after restart/migration, and obtain approval. Relinquishing state
+  ownership does not delete a NAD; remove matching configuration in a controlled
+  sequence to avoid recreation. Delete the retired NAD only after consumer
+  checks. NAD deletion does not delete VMs but can prevent their Pods reattaching.
+- Services reserve `cidrhost(cidr, 1)` for the gateway and
+  `cidrhost(cidr, 2)` for DHCP. These offsets are not configurable here; use the
+  child modules directly when their wider interfaces are needed. DHCP-only
+  composition still advertises offset 1, which must be provided separately.
+- Services do not implicitly set NAD route metadata. Declare needed metadata
+  before creation without making the NAD depend on a child workload output.
+- Child workloads remain independently updatable and deletable; NAD lifecycle
+  protection does not protect them. Both are single-Pod, `Recreate`, lab/sandbox
+  designs: DHCP leases are ephemeral, NAT sessions are lost on Pod replacement,
+  and neither provides HA. NAT does not provide DNS.
 
-- `harvester_network` delete or replacement;
-- removal of a network module/key without an approved migration ticket;
-- any direct NAD update to VLAN CNI config;
-- ClusterNetwork/VLANConfig changes without network-team approval.
+## Testing
 
-Separate foundation credentials (ClusterNetwork/VLANConfig/uplinks) from
-workload-network credentials. Enable audit alerting for NAD delete and VLAN
-config mutations.
-
-## Verification
+Run from `modules/protected-network` with Terraform 1.9+:
 
 ```sh
-terraform fmt -recursive -check
+terraform init -backend=false
 terraform validate
 terraform test
 ```
+
+The suite uses mocked providers and plan-only runs to check validation, network
+attributes, outputs, and service composition. It does not prove live network
+connectivity or destruction protection against existing state. Provider
+installation still requires registry access or a configured local mirror/cache.
+
+An optional lifecycle check uses synthetic state and a live, read-only
+ClusterNetwork lookup (no infrastructure apply/delete). From the module
+directory, supply your own values:
+
+```sh
+scripts/verify_lifecycle_guarantees.sh "$CLUSTER_NETWORK_NAME" "$KUBECONFIG_PATH"
+```
+
+This separate script requires Bash, Python 3, Terraform, and cluster access.
+Live canary checks remain necessary for node coverage, DHCP, routes, DNS, MTU,
+and application connectivity.

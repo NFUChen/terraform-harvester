@@ -1,142 +1,123 @@
 # volume-protection-policy
 
-Cluster-level hard deletion protection for PVCs created by the companion
-`protected-volume` module.
+## Purpose and scope
 
-Terraform `prevent_destroy` exists only in configuration. If somebody removes
-the entire module/resource block, Terraform no longer sees that lifecycle
-rule. This admission policy is the independent control that survives
-configuration removal.
+Installs one cluster-scoped `ValidatingAdmissionPolicy` and binding that deny PVC
+deletion and protection-label removal for PVCs labeled
+`platform.harvester.io/protected=true`. Provides enforcement that survives removal
+of the volume Terraform configuration. Does not create PVCs, label workloads, grant
+break-glass RBAC, configure audit alerting, or manage backups.
 
-## What it enforces
+## Requirements and providers
 
-For PVCs labeled:
+| Dependency | Declared constraint / requirement |
+| --- | --- |
+| Terraform | `>= 1.3`; mocked tests require 1.7+. |
+| `hashicorp/kubernetes` | `~> 2.38` (>= 2.38.0, < 3.0.0) |
 
-```text
-platform.harvester.io/protected=true
-```
+Configure the Kubernetes provider in the caller. `kubernetes_manifest` requires a
+reachable API server at plan time, so this module cannot be planned offline against
+a real provider. The cluster must serve `admissionregistration.k8s.io/v1`
+`ValidatingAdmissionPolicy` and `ValidatingAdmissionPolicyBinding`, and the applying
+identity needs permission to manage both cluster-scoped resources.
 
-ordinary Kubernetes identities cannot:
+Install once per cluster, before protected PVCs exist, from foundation state that
+is separate from volume and application state.
 
-- delete the PVC;
-- update the PVC to remove or change the protection label.
+## Default context
 
-The policy uses `failurePolicy: Fail` and a binding with `Deny`. Exact,
-audited break-glass usernames are the only bypass.
+The policy and binding are named `protect-harvester-persistent-volumes` and
+`failure_policy` is fixed at `Fail`, so evaluation problems block PVC update and
+delete instead of allowing them. Only `break_glass_usernames` must be supplied.
 
-## Install once per cluster
+Scope is cluster-wide and not configurable here: the binding matches all PVC
+`UPDATE` and `DELETE` requests in every namespace, though only PVCs labeled
+`platform.harvester.io/protected=true` are denied. Install one instance per
+cluster, before protected PVCs exist, from state separate from volume and
+application state. Override `policy_name` only to avoid a naming collision;
+renaming an installed policy is a replacement blocked by `prevent_destroy`.
 
-Deploy from a platform/foundation state separate from application and volume
-states:
+## Usage
+
+Caller configuration snippet, **not a standalone root module**: declare and supply
+all referenced variables and configure the provider separately. The source path
+assumes the caller is at the **repository root**; adjust it elsewhere.
 
 ```hcl
-provider "kubernetes" {
-  config_path = var.kubeconfig
-}
-
 module "volume_protection_policy" {
   source = "./modules/volume-protection-policy"
 
-  break_glass_usernames = [
-    "platform-break-glass",
-  ]
+  break_glass_usernames = var.break_glass_usernames
 }
 ```
 
-Do not include the normal Terraform service account, CI identity, VM operator,
-or human administrator identities used for routine work in the break-glass
-list.
+Usernames must match `request.userInfo.username` exactly, as the API server reports
+it; a service account uses the form `system:serviceaccount:<namespace>:<name>`.
+Supply only audited emergency identities. Never include routine Terraform, CI,
+operator, or administrator identities used for day-to-day work. Admission bypass
+is not RBAC: those identities also need PVC update/delete permission granted
+separately.
 
-## Break-glass identity requirements
+## Inputs
 
-The identity should:
+| Name | Type | Required / default | Meaning |
+| --- | --- | --- | --- |
+| `policy_name` | `string` | `"protect-harvester-persistent-volumes"` | Shared cluster-scoped policy and binding name; renaming can require replacement, blocked by `prevent_destroy` while configured. |
+| `break_glass_usernames` | `set(string)` | Required, non-empty | Exact `request.userInfo.username` values allowed to bypass. Blank-only and whitespace-padded values are rejected; matching is by authenticated username, not group or credential/token value. Use the actual API-server username, including service-account identity format where applicable. |
+| `failure_policy` | `string` | `"Fail"` | Must remain `Fail`; the module rejects any other value. |
 
-- be disabled or inaccessible during normal operation;
-- require MFA/short-lived credentials where the identity provider supports it;
-- emit auditable API-server events;
-- require data-owner and platform approval;
-- have a documented incident/decommission ticket;
-- be reviewed periodically.
+## Outputs
 
-The policy authorizes the username at admission time. Kubernetes RBAC must
-still grant the break-glass identity PVC update/delete permissions.
+| Output | Meaning |
+| --- | --- |
+| `policy_name` | Installed `ValidatingAdmissionPolicy` name. |
+| `binding_name` | Installed `ValidatingAdmissionPolicyBinding` name. |
+| `protected_label` | Enforced protection label key, matching the label applied by `../protected-volume`. |
 
-## Decommission sequence
+## Behavior and limitations / lifecycle
 
-1. Verify no VM, VMI, Pod, or VolumeAttachment consumes the volume.
-2. Verify backup and restore procedure.
-3. Remove the volume from Terraform state without destroying it.
-4. Remove it from root configuration.
-5. Using the break-glass identity, remove the protection label.
-6. Delete the PVC.
-7. Preserve audit evidence.
+- The binding uses `Deny` with empty `matchResources`, so the policy evaluates
+  cluster-wide for PVC `UPDATE` and `DELETE`. Unlabeled PVCs are unaffected.
+  Protected PVCs may be updated only while preserving the label value `true`.
+  `CREATE` is not intercepted, so the label is not mandatory for new PVCs.
+- `failurePolicy: Fail` means evaluation problems block PVC update/delete rather
+  than silently allowing them. Verify the generated expression and behavior in a
+  sandbox before enforcing in production.
+- Break-glass usernames are rendered into the CEL expression in sorted order to
+  keep diffs stable. The policy only authorizes names at admission; RBAC must
+  separately grant those identities PVC update/delete. Restrict, monitor, and
+  periodically review them, and require approvals plus a documented ticket.
+- Both resources use `prevent_destroy = true`. This is **not absolute**: the rule
+  lives in configuration, so removing the module/resource configuration removes
+  the guard, and a sufficiently privileged identity can change or delete the policy
+  and binding directly. The enforceable boundary is outside this state: withhold
+  `update`/`delete` on `validatingadmissionpolicies` and
+  `validatingadmissionpolicybindings` from routine identities, alert on audit
+  events for these objects, and require separation of duties for retirement.
+- Deleting or disabling the policy while protected PVCs exist removes protection
+  immediately. Retire it only as an approved break-glass change with evidence that
+  no protected PVC remains. It is not a backup or data-integrity control: it matches
+  PVC operations, not backend data destruction, PV operations, or namespace deletion
+  requests. Controller-issued deletes of labeled PVCs are still subject to admission
+  and can block cleanup; unprotected VM-owned disks are outside this label-based guard.
+- Decommissioning a protected volume uses `../protected-volume`: verify consumers
+  and backups, relinquish Terraform ownership without deletion, remove matching
+  configuration, then remove the label and delete the PVC as the break-glass
+  identity and preserve audit evidence.
 
-See `../protected-volume/README.md` for exact commands and the complete
-runbook.
+## Testing
 
-## Compatibility
-
-Requires a Kubernetes API server supporting
-`admissionregistration.k8s.io/v1` `ValidatingAdmissionPolicy` and
-`ValidatingAdmissionPolicyBinding`. Harvester provider 1.9.0 targets modern
-Kubernetes, but verify the cluster API before rollout:
-
-```sh
-kubectl api-resources | grep ValidatingAdmissionPolicy
-```
-
-## Rollout safety
-
-Before enforcing in production:
-
-1. Render and inspect the generated CEL expression.
-2. Test against unprotected PVC create/update/delete in a sandbox namespace.
-3. Test that a protected PVC update preserving the label succeeds.
-4. Test that normal delete and label removal are denied.
-5. Test that the audited break-glass identity can remove the label and delete
-   a disposable protected PVC.
-6. Confirm policy/binding are managed by a foundation state with restricted
-   write access.
-
-Do not delete or disable this policy while protected PVCs exist.
-
-The policy and binding carry `prevent_destroy = true`, so an ordinary
-`terraform destroy` in the foundation workspace cannot remove PVC protection
-while this module remains configured.
-
-That lifecycle rule has the same structural limit as the one on the volumes
-themselves: it lives in configuration. If somebody deletes this module block,
-Terraform stops evaluating the rule and can then destroy the policy and
-binding. Protecting a Terraform resource with more Terraform is circular — the
-same identity that can edit this code and state can remove whatever guard is
-added here.
-
-The enforceable boundary therefore has to sit outside this state:
-
-1. **RBAC.** The Terraform identity used for day-to-day platform work must not
-   hold `delete`/`update` on `validatingadmissionpolicies` or
-   `validatingadmissionpolicybindings`. Grant that only to a separate
-   break-glass identity, managed from a different, more restricted state or
-   by cluster administrators.
-2. **Detection.** Alert on API-server audit events for delete/update of this
-   policy and binding. If prevention is bypassed by someone with sufficient
-   privilege, that must page a human immediately.
-3. **Separation of duties.** Policy retirement should require approval from a
-   role that cannot also approve the corresponding data deletion.
-
-Retiring the policy legitimately is a break-glass change: remove the lifecycle
-blocks under review, or perform an approved state/`kubectl` operation, with
-evidence that no protected PVC remains.
-
-The bundled tests use a mocked provider and pin the exact generated CEL string
-and match constraints, which catches regressions but does not prove the API
-server accepts or enforces the expression. Run the sandbox rollout checks above
-against the target Kubernetes version before enabling this in production.
-
-## Verification
+Run from `modules/volume-protection-policy` with Terraform 1.7+:
 
 ```sh
-terraform fmt -recursive -check
+terraform init -backend=false
 terraform validate
 terraform test
 ```
+
+Tests use a mocked provider and pin the exact generated CEL string, match
+constraints, deny action, and fail-closed setting. They catch regressions but do
+not prove the API server accepts or enforces the expression; run sandbox checks
+for allowed updates, denied deletions and label removals, and a verified
+break-glass path against the target Kubernetes version. Provider installation
+requires registry access or a configured mirror/cache.
